@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NorthFi Release Operations</title>
+  <link rel="stylesheet" href="styles.css?v=20260701-attention-view">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand-block">
+      <div class="brand-mark" aria-hidden="true">NF</div>
+      <div>
+        <p class="eyebrow">Release operations</p>
+        <h1>NorthFi Build Dashboard</h1>
+        <p id="indexStatus">Loading build index...</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span class="environment-pill">Local artifacts</span>
+      <button id="refreshButton" class="icon-button" title="Refresh data" aria-label="Refresh data">&#8635;</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar" aria-label="Build filters">
+      <div class="sidebar-head">
+        <h2>Filters</h2>
+      </div>
+      <label class="field">
+        <span>Search</span>
+        <input id="searchInput" type="search" placeholder="Tag, commit, layer, artifact">
+      </label>
+      <label class="field">
+        <span>Machine</span>
+        <select id="machineFilter"></select>
+      </label>
+      <label class="field">
+        <span>Channel</span>
+        <select id="channelFilter"></select>
+      </label>
+      <label class="field">
+        <span>CVE status</span>
+        <select id="cveFilter">
+          <option value="all">All</option>
+          <option value="unpatched">Has unpatched</option>
+          <option value="clean">No unpatched</option>
+          <option value="missing">No CVE report</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>CVE severity</span>
+        <select id="severityFilter">
+          <option value="all">All severities</option>
+          <option value="critical">Critical</option>
+          <option value="high">High</option>
+          <option value="medium">Medium</option>
+          <option value="low">Low</option>
+        </select>
+      </label>
+      <button id="clearFilters" class="secondary-button" type="button">Clear filters</button>
+      <div class="stats" id="stats"></div>
+      <section class="latest" aria-label="Latest builds">
+        <h2>Latest</h2>
+        <div id="latestList"></div>
+      </section>
+    </aside>
+
+    <section class="content" aria-label="Build details">
+      <nav class="view-tabs" role="tablist" aria-label="Dashboard views">
+        <button class="view-tab active" type="button" data-view="overview" role="tab" aria-selected="true">Overview</button>
+        <button class="view-tab" type="button" data-view="attention" role="tab" aria-selected="false">Needs Attention</button>
+        <button class="view-tab" type="button" data-view="compare" role="tab" aria-selected="false">Compare</button>
+        <button class="view-tab" type="button" data-view="lineage" role="tab" aria-selected="false">Release Lineage</button>
+      </nav>
+
+      <div id="overviewView" class="view-panel active" role="tabpanel">
+        <section class="health-panel" aria-label="Build health">
+          <div class="section-head">
+            <h2>Build Health</h2>
+            <span id="healthStamp"></span>
+          </div>
+          <div id="healthGrid" class="health-grid"></div>
+        </section>
+
+        <section class="regression-panel" aria-label="Regression alerts">
+          <div class="section-head">
+            <h2>Regression Alerts</h2>
+            <span id="regressionStatus"></span>
+          </div>
+          <div id="regressionAlerts" class="regression-alerts"></div>
+        </section>
+
+
+        <section class="release-list" aria-label="Releases">
+          <div class="section-head release-head">
+            <div>
+              <h2 id="releaseListTitle">Releases</h2>
+              <div class="channel-tabs" role="tablist" aria-label="Build channel">
+                <button class="channel-tab active" type="button" data-channel="release" role="tab" aria-selected="true">Releases</button>
+                <button class="channel-tab" type="button" data-channel="development" role="tab" aria-selected="false">Development</button>
+                <button class="channel-tab" type="button" data-channel="all" role="tab" aria-selected="false">All</button>
+              </div>
+            </div>
+            <span id="releaseCount"></span>
+          </div>
+          <div id="releaseTable" class="table-shell"></div>
+        </section>
+
+        <section class="details" aria-label="Selected build">
+          <div id="detailsEmpty" class="empty-state">
+            <h2>Select a build</h2>
+            <p>Import one or more <code>yocto-metadata-*.tar.gz</code> files, then select a build to inspect artifacts, layers, and CVEs.</p>
+          </div>
+          <div id="detailsPanel" class="hidden"></div>
+        </section>
+      </div>
+
+      <div id="attentionView" class="view-panel hidden" role="tabpanel">
+        <section class="attention-panel" aria-label="Needs attention">
+          <div class="section-head">
+            <div>
+              <h2>Needs Attention</h2>
+              <p class="section-subtitle">Actionable release/RC tag issues from CVE, flashing, lineage, layer tags, and regression checks.</p>
+            </div>
+            <span id="attentionStatus"></span>
+          </div>
+          <div id="attentionQueue" class="attention-queue"></div>
+        </section>
+      </div>
+
+      <div id="compareView" class="view-panel hidden" role="tabpanel">
+        <section class="compare-panel compare-page" aria-label="Compare builds">
+          <div class="section-head">
+            <h2>Compare Builds</h2>
+            <span id="compareStatus"></span>
+          </div>
+          <div class="compare-controls">
+            <label class="field">
+              <span>Base</span>
+              <select id="compareBase"></select>
+            </label>
+            <label class="field">
+              <span>Target</span>
+              <select id="compareTarget"></select>
+            </label>
+            <button id="compareSwap" class="link-button" type="button">Swap</button>
+          </div>
+          <div id="compareOutput" class="compare-output"></div>
+        </section>
+      </div>
+
+      <div id="lineageView" class="view-panel hidden" role="tabpanel">
+        <section class="lineage-panel" aria-label="Release lineage">
+          <div class="section-head">
+            <h2>Release Lineage</h2>
+            <span id="lineageStatus"></span>
+          </div>
+          <div id="lineageTree" class="lineage-tree"></div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js?v=20260701-attention-view"></script>
+</body>
+</html>
