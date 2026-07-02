@@ -1,4 +1,16 @@
 services:
+  portal-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: northfi-release-portal-api:local
+    container_name: northfi-release-portal-api
+    environment:
+      PORTAL_DB_PATH: /data/portal.db
+    volumes:
+      - ${DASHBOARD_STATE_DIR:-./state}:/data
+    restart: unless-stopped
+
   dashboard-indexer:
     image: ${DASHBOARD_INDEXER_IMAGE:-eavillegas-northfinding-v10a-yocto-builder:latest}
     container_name: northfi-release-dashboard-indexer
@@ -28,4 +40,5 @@ services:
       - ${DASHBOARD_DATA_DIR:-/data/yocto/artifacts/dashboard}:/usr/share/nginx/html/data:ro
     depends_on:
       - dashboard-indexer
+      - portal-api
     restart: unless-stopped

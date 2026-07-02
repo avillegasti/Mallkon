@@ -12,6 +12,8 @@ const state = {
   details: new Map(),
   cveDetails: new Map(),
   packageDetails: new Map(),
+  reviews: new Map(),
+  reviewAudits: new Map(),
   tab: "summary",
   cveRowStatus: "all",
   cveRowSeverity: "all",
@@ -65,6 +67,21 @@ const REQUIRED_RELEASE_LAYER_NAMES = [
   "meta-layout-base",
   "meta-arquimea-security",
 ];
+
+const REVIEW_STORAGE_KEY = "northfi.releaseReviews.v1";
+const REVIEW_ACTOR_STORAGE_KEY = "northfi.currentReviewer";
+
+const RELEASE_REVIEW_CHECKS = [
+  ["cve_reviewed", "CVEs reviewed", "Open CVEs were inspected and accepted or assigned."],
+  ["full_cve_export_reviewed", "Full CVE export reviewed", "CSV/JSON export was generated and reviewed."],
+  ["artifacts_verified", "Artifacts verified", "Boot, WIC, BMAP, and SWU artifacts are present."],
+  ["flashing_tested", "Flashing tested", "Image was flashed or test evidence was attached."],
+  ["dev_origins_confirmed", "Dev origins confirmed", "Linked development builds match the released tag."],
+  ["layer_tags_verified", "Layer tags verified", "Required release layer tags are present."],
+  ["regression_reviewed", "Regression reviewed", "Latest-vs-previous regression alerts were checked."],
+  ["jira_linked", "Jira linked", "Optional release or security tracking ticket is linked."],
+];
+const OPTIONAL_RELEASE_REVIEW_CHECKS = new Set(["jira_linked"]);
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (char) => ({
@@ -382,7 +399,8 @@ function severityClass(severity, status) {
 async function fetchJson(path) {
   let response;
   try {
-    response = await fetch(`${path}?ts=${Date.now()}`, { cache: "no-store" });
+    const separator = path.includes("?") ? "&" : "?";
+    response = await fetch(`${path}${separator}ts=${Date.now()}`, { cache: "no-store" });
   } catch (error) {
     throw { kind: "network", path, message: `Request failed for ${path}: ${error.message || error}` };
   }
@@ -570,6 +588,7 @@ function renderAll() {
   renderTable();
   renderDetails();
 }
+
 
 function renderStats() {
   const total = state.releases.length;
@@ -1157,6 +1176,7 @@ function renderLineageCard(release) {
         <p class="item-meta">${escapeHtml(originCount)} | ${escapeHtml(dateLabel(release))}</p>
       </div>
       <div class="header-actions">
+        ${reviewBadge(release)}
         ${channelBadge(release.channel)}
         ${readinessBadge(release.flashing)}
         ${cveBadge(release.cve_summary)}
@@ -1173,6 +1193,7 @@ function renderLineageCard(release) {
 function renderLineage() {
   const releases = lineageReleases();
   if (!el.lineageTree || !el.lineageStatus) return;
+  ensureReviewDataFor(releases, { render: false, renderLineage: true });
   if (!state.releases.length) {
     el.lineageStatus.textContent = "No builds indexed";
     el.lineageTree.innerHTML = `<div class="empty-state"><p>No release lineage can be rendered until builds are indexed.</p></div>`;
@@ -1530,6 +1551,643 @@ function compareDataReady(base, target) {
 }
 
 
+function isReleaseTag(release) {
+  return release?.channel === "release" || release?.channel === "rc";
+}
+
+function reviewIdentity(release) {
+  return [release?.tag || release?.artifact_label || release?.id, release?.machine, release?.kas_manifest]
+    .filter(Boolean)
+    .join("::");
+}
+
+function reviewApiPath(release) {
+  return `/api/reviews/${encodeURIComponent(reviewIdentity(release))}`;
+}
+
+function reviewQuery(release) {
+  const params = new URLSearchParams({
+    tag: release?.tag || "",
+    build: release?.artifact_label || release?.id || "",
+    machine: release?.machine || "",
+    manifest: release?.kas_manifest || "",
+    commit: release?.commit || "",
+  });
+  return `${reviewApiPath(release)}?${params.toString()}`;
+}
+
+function reviewReleaseMetadata(release) {
+  return {
+    tag: release?.tag || "",
+    build: release?.artifact_label || release?.id || "",
+    machine: release?.machine || "",
+    manifest: release?.kas_manifest || "",
+    commit: release?.commit || "",
+  };
+}
+
+function readReviewStore() {
+  try {
+    const raw = window.localStorage.getItem(REVIEW_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (error) {
+    return {};
+  }
+}
+
+function writeReviewStore(store) {
+  try {
+    window.localStorage.setItem(REVIEW_STORAGE_KEY, JSON.stringify(store));
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function cleanReviewerName(value = "") {
+  const reviewer = String(value || "").trim();
+  return reviewer.toLowerCase() === "unknown" ? "" : reviewer;
+}
+
+function currentReviewer(fallback = "") {
+  try {
+    const stored = cleanReviewerName(window.localStorage.getItem(REVIEW_ACTOR_STORAGE_KEY));
+    if (stored) return stored;
+    if (window.localStorage.getItem(REVIEW_ACTOR_STORAGE_KEY)) window.localStorage.removeItem(REVIEW_ACTOR_STORAGE_KEY);
+    return cleanReviewerName(fallback);
+  } catch (error) {
+    return cleanReviewerName(fallback);
+  }
+}
+
+function rememberReviewer(actor) {
+  try {
+    const reviewer = cleanReviewerName(actor);
+    if (reviewer) window.localStorage.setItem(REVIEW_ACTOR_STORAGE_KEY, reviewer);
+  } catch (error) {
+    // Ignore browser storage failures; the backend still receives the actor.
+  }
+}
+
+function emptyReview() {
+  return {
+    status: "Draft",
+    owner: "",
+    jira: "",
+    note: "",
+    actor: currentReviewer(),
+    updatedAt: "",
+    updatedBy: "",
+    lastReviewedAt: "",
+    source: "local",
+    apiError: "",
+    checks: Object.fromEntries(RELEASE_REVIEW_CHECKS.map(([key]) => [key, false])),
+    checkMeta: Object.fromEntries(RELEASE_REVIEW_CHECKS.map(([key]) => [key, { checkedBy: "", checkedAt: "", updatedAt: "" }])),
+  };
+}
+
+function normalizeApiReview(data = {}) {
+  const base = emptyReview();
+  const checks = { ...base.checks };
+  const checkMeta = { ...base.checkMeta };
+  for (const item of data.checklist || []) {
+    if (!item?.key) continue;
+    checks[item.key] = Boolean(item.checked);
+    checkMeta[item.key] = {
+      checkedBy: item.checked_by || item.checkedBy || "",
+      checkedAt: item.checked_at || item.checkedAt || "",
+      updatedAt: item.updated_at || item.updatedAt || "",
+    };
+  }
+  return {
+    ...base,
+    status: data.status || base.status,
+    owner: data.owner || "",
+    jira: data.jira || data.jira_url || "",
+    note: data.note || data.decision_note || "",
+    updatedAt: data.updated_at || data.updatedAt || "",
+    updatedBy: data.updated_by || data.updatedBy || "",
+    lastReviewedAt: data.last_reviewed_at || data.lastReviewedAt || "",
+    source: data.source || "database",
+    checks,
+    checkMeta,
+  };
+}
+
+function localReview(release) {
+  const key = reviewIdentity(release);
+  const stored = readReviewStore()[key] || {};
+  const base = emptyReview();
+  return {
+    ...base,
+    ...stored,
+    jira: stored.jira || stored.jira_url || "",
+    note: stored.note || stored.decision_note || "",
+    updatedBy: stored.updatedBy || stored.updated_by || "",
+    lastReviewedAt: stored.lastReviewedAt || stored.last_reviewed_at || stored.updatedAt || "",
+    source: stored.source || "local",
+    checks: { ...base.checks, ...(stored.checks || {}) },
+    checkMeta: { ...base.checkMeta, ...(stored.checkMeta || {}) },
+  };
+}
+
+function releaseReview(release) {
+  const cached = state.reviews.get(release?.id);
+  if (cached && !cached.__loading) return cached;
+  const fallback = localReview(release);
+  return cached?.__loading ? { ...fallback, __loading: true } : fallback;
+}
+
+function saveLocalReleaseReview(release, review, apiError = "") {
+  const key = reviewIdentity(release);
+  if (!key) return null;
+  const now = new Date().toISOString();
+  const actor = cleanReviewerName(review.actor) || cleanReviewerName(review.owner);
+  const previous = localReview(release);
+  const checkMeta = { ...previous.checkMeta };
+  for (const [checkKey, checked] of Object.entries(review.checks || {})) {
+    const wasChecked = Boolean(previous.checks?.[checkKey]);
+    if (checked && !wasChecked) checkMeta[checkKey] = { checkedBy: actor, checkedAt: now, updatedAt: now };
+    if (!checked && wasChecked) checkMeta[checkKey] = { checkedBy: "", checkedAt: "", updatedAt: now };
+  }
+  const storedReview = {
+    status: review.status || "Draft",
+    owner: review.owner || "",
+    jira: review.jira || "",
+    note: review.note || "",
+    actor,
+    updatedAt: now,
+    updatedBy: actor,
+    lastReviewedAt: now,
+    source: apiError ? "local-fallback" : "local",
+    apiError,
+    checks: { ...emptyReview().checks, ...(review.checks || {}) },
+    checkMeta,
+  };
+  const store = readReviewStore();
+  store[key] = storedReview;
+  if (!writeReviewStore(store)) return null;
+  state.reviews.set(release.id, storedReview);
+  return storedReview;
+}
+
+async function loadReleaseReview(release, options = {}) {
+  if (!isReleaseTag(release)) return null;
+  if (!state.reviews.has(release.id)) state.reviews.set(release.id, { __loading: true });
+  try {
+    const data = await fetchJson(reviewQuery(release));
+    const normalized = normalizeApiReview(data);
+    state.reviews.set(release.id, normalized);
+    if (options.renderLineage && state.activeView === "lineage") renderLineage();
+    else if (options.render !== false) renderDetails();
+    return normalized;
+  } catch (error) {
+    const fallback = { ...localReview(release), apiError: normalizeLoadError(error).message, source: "local-fallback" };
+    state.reviews.set(release.id, fallback);
+    if (options.renderLineage && state.activeView === "lineage") renderLineage();
+    else if (options.render !== false) renderDetails();
+    return fallback;
+  }
+}
+
+async function loadReleaseAudit(release, options = {}) {
+  if (!isReleaseTag(release)) return null;
+  if (!state.reviewAudits.has(release.id)) state.reviewAudits.set(release.id, { __loading: true, events: [] });
+  try {
+    const data = await fetchJson(`${reviewApiPath(release)}/audit`);
+    const audit = { events: Array.isArray(data.events) ? data.events : [] };
+    state.reviewAudits.set(release.id, audit);
+    if (options.render !== false) renderDetails();
+    return audit;
+  } catch (error) {
+    const normalized = normalizeLoadError(error);
+    const audit = { error: normalized.message, events: [] };
+    state.reviewAudits.set(release.id, audit);
+    if (options.render !== false) renderDetails();
+    return audit;
+  }
+}
+
+function ensureReviewAuditData(release, options = {}) {
+  if (!isReleaseTag(release) || state.reviewAudits.has(release.id)) return;
+  state.reviewAudits.set(release.id, { __loading: true, events: [] });
+  loadReleaseAudit(release, options);
+}
+
+function resetReviewAudit(release) {
+  if (release?.id) state.reviewAudits.delete(release.id);
+}
+
+function auditActionLabel(event = {}) {
+  if (event.action === "create_review") return "Created decision";
+  if (event.action === "update_decision") return `Changed ${event.field || "decision"}`;
+  if (event.action === "update_checklist") {
+    const check = RELEASE_REVIEW_CHECKS.find(([key]) => key === event.field);
+    return `Checklist: ${check ? check[1] : event.field || "item"}`;
+  }
+  return event.action || "Audit event";
+}
+
+function auditValue(value) {
+  if (value === "True") return "checked";
+  if (value === "False") return "unchecked";
+  return value || "empty";
+}
+
+function renderReviewAudit(release) {
+  const audit = state.reviewAudits.get(release.id) || { __loading: true, events: [] };
+  if (audit.__loading) {
+    return `<section class="review-audit"><div class="review-audit-head"><h3>Audit history</h3><span>Loading...</span></div></section>`;
+  }
+  if (audit.error) {
+    return `<section class="review-audit"><div class="review-audit-head"><h3>Audit history</h3><span>Unavailable</span></div><div class="data-notice warn"><div class="data-notice-title">Could not load audit log</div><p>${escapeHtml(audit.error)}</p></div></section>`;
+  }
+  const events = audit.events || [];
+  return `<section class="review-audit">
+    <div class="review-audit-head">
+      <h3>Audit history</h3>
+      <span>${events.length ? `${events.length} events` : "No events"}</span>
+    </div>
+    <div class="review-audit-list">
+      ${events.length ? events.slice(0, 20).map((event) => `
+        <div class="review-audit-event">
+          <div>
+            <strong>${escapeHtml(auditActionLabel(event))}</strong>
+            <span>${escapeHtml(event.actor || "unknown")} | ${escapeHtml(reviewTimestampLabel(event.created_at))}</span>
+          </div>
+          <code>${escapeHtml(auditValue(event.old_value))} -> ${escapeHtml(auditValue(event.new_value))}</code>
+        </div>
+      `).join("") : `<div class="item-meta">No audit events saved for this tag yet.</div>`}
+    </div>
+  </section>`;
+}
+
+function ensureReviewData(release, options = {}) {
+  if (!isReleaseTag(release) || state.reviews.has(release.id)) return;
+  state.reviews.set(release.id, { __loading: true });
+  loadReleaseReview(release, options);
+}
+
+function ensureReviewDataFor(releases, options = {}) {
+  for (const release of releases || []) ensureReviewData(release, options);
+}
+
+async function saveReleaseReview(release, review) {
+  const actor = (review.actor || "").trim();
+  if (!actor) return null;
+  rememberReviewer(actor);
+  const payload = {
+    actor,
+    release: reviewReleaseMetadata(release),
+    status: review.status || "Draft",
+    owner: review.owner || "",
+    jira: review.jira || "",
+    note: review.note || "",
+    checks: { ...emptyReview().checks, ...(review.checks || {}) },
+  };
+  try {
+    const response = await fetch(reviewApiPath(release), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    const data = await response.json();
+    const normalized = normalizeApiReview(data);
+    state.reviews.set(release.id, normalized);
+    return normalized;
+  } catch (error) {
+    return saveLocalReleaseReview(release, { ...payload, actor }, `API unavailable: ${error.message || error}`);
+  }
+}
+
+function reviewTimestampLabel(value) {
+  const time = Date.parse(value || "");
+  if (Number.isNaN(time)) return "not reviewed yet";
+  return new Date(time).toISOString().replace("T", " ").slice(0, 16);
+}
+
+function reviewProgress(review) {
+  const checks = review?.checks || {};
+  const requiredChecks = RELEASE_REVIEW_CHECKS.filter(([key]) => !OPTIONAL_RELEASE_REVIEW_CHECKS.has(key));
+  const done = requiredChecks.filter(([key]) => Boolean(checks[key])).length;
+  return { done, total: requiredChecks.length };
+}
+
+function reviewStatusClass(status) {
+  const value = String(status || "").toLowerCase();
+  if (value === "approved" || value === "released") return "ok";
+  if (value === "blocked") return "danger";
+  if (value === "under review") return "warn";
+  return "unknown";
+}
+
+function reviewBadge(release) {
+  if (!isReleaseTag(release)) return "";
+  const review = releaseReview(release);
+  const progress = reviewProgress(review);
+  const loading = review.__loading ? " loading" : "";
+  return `<span class="badge ${reviewStatusClass(review.status)}" title="Release review: ${progress.done}/${progress.total} checks${loading}">${escapeHtml(review.status)} ${progress.done}/${progress.total}</span>`;
+}
+
+function previousReleaseFor(release) {
+  if (!isReleaseTag(release)) return null;
+  const releases = releaseCandidatesSorted();
+  const currentTime = dateValue(release);
+  const older = releases.filter((item) => item.id !== release.id && dateValue(item) <= currentTime);
+  return older.find((item) => item.machine === release.machine && item.kas_manifest === release.kas_manifest) || older[0] || null;
+}
+
+function reportFileBase(release) {
+  return safeFileName([release.tag || release.artifact_label || release.id, release.machine].filter(Boolean).join("-")) || "release-report";
+}
+
+function safeFileName(value) {
+  return String(value || "")
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 120);
+}
+
+function md(value) {
+  return String(value ?? "").replace(/\r?\n/g, " ").trim() || "not recorded";
+}
+
+function mdCell(value) {
+  return md(value).replace(/\|/g, "\\|");
+}
+
+function markdownTable(headers, rows) {
+  if (!rows.length) return "No entries recorded.\n";
+  return [
+    `| ${headers.map(mdCell).join(" | ")} |`,
+    `| ${headers.map(() => "---").join(" | ")} |`,
+    ...rows.map((row) => `| ${row.map(mdCell).join(" | ")} |`),
+  ].join("\n") + "\n";
+}
+
+function cveSeverityText(release, cve = {}) {
+  const severity = cve.counts_by_severity || release.cve_severity || {};
+  return `critical ${Number(severity.critical || 0)}, high ${Number(severity.high || 0)}, medium ${Number(severity.medium || 0)}, low ${Number(severity.low || 0)}`;
+}
+
+function cveReportRows(cve = {}) {
+  const issues = Array.isArray(cve.issues) ? cve.issues : [];
+  return issues
+    .filter((issue) => String(issue.status || "").toLowerCase() === "unpatched" || String(issue.severity || "").toLowerCase() === "critical")
+    .sort((a, b) => (
+      statusRank(a.status) - statusRank(b.status) ||
+      severityRank(a.severity) - severityRank(b.severity) ||
+      String(a.id || "").localeCompare(String(b.id || ""))
+    ))
+    .slice(0, 25)
+    .map((issue) => [issue.id || "", issue.package || "", issue.status || "", issue.severity || "", issue.layer || ""]);
+}
+
+function releaseReportModel(release, detail = {}, cve = {}) {
+  const previous = previousReleaseFor(release);
+  const regressions = previous ? releaseRegressionAlerts(release, previous) : [];
+  const readiness = readinessSummary(release, detail);
+  const origins = originBuilds(release);
+  const summary = release.cve_summary || {};
+  const artifacts = Array.isArray(detail.artifacts) ? detail.artifacts : [];
+  const trace = layerTraceability(release, detail);
+  return { previous, regressions, readiness, origins, summary, artifacts, trace, cve };
+}
+
+function buildReleaseReportMarkdown(release, detail = {}, cve = {}) {
+  const model = releaseReportModel(release, detail, cve);
+  const lines = [];
+  lines.push(`# Release Report: ${md(release.tag || release.artifact_label || release.id)}`);
+  lines.push("");
+  lines.push(`Generated: ${new Date().toISOString()}`);
+  lines.push("");
+  lines.push("## Build");
+  lines.push(`- Tag: ${md(release.tag || "not a tag")}`);
+  lines.push(`- Build: ${md(release.artifact_label || release.id)}`);
+  lines.push(`- Channel: ${md(release.channel)}`);
+  lines.push(`- Machine: ${md(release.machine)}`);
+  lines.push(`- Manifest: ${md(release.kas_manifest)}`);
+  lines.push(`- Commit: ${md(release.commit)}`);
+  lines.push(`- Azure build: ${md(buildId(release, detail))}`);
+  lines.push(`- Generated: ${md(release.generated_at_utc || detail.generated_at_utc)}`);
+  lines.push("");
+
+  lines.push("## Development origins");
+  lines.push(markdownTable(["Build", "Match", "Azure build", "Commit", "Manifest"], model.origins.map((origin) => [
+    origin.label || origin.id,
+    origin.match || "linked",
+    origin.build_id || "",
+    shortCommit(origin.commit || ""),
+    origin.kas_manifest || "",
+  ])).trim());
+  lines.push("");
+
+  lines.push("## Readiness");
+  lines.push(`- Result: ${model.readiness.ready ? "ready" : `${model.readiness.failed.length} blocker(s)`}`);
+  lines.push(markdownTable(["Check", "Status", "Detail"], model.readiness.checks.map((check) => [check.label, check.ok ? "OK" : "BLOCKED", check.detail])).trim());
+  lines.push("");
+
+  lines.push("## CVEs");
+  lines.push(`- CVE report: ${model.summary.available ? "present" : "missing"}`);
+  lines.push(`- Unpatched: ${Number(model.summary.unpatched || 0)}`);
+  lines.push(`- Severity: ${cveSeverityText(release, cve)}`);
+  const cveRows = cveReportRows(cve);
+  lines.push(cveRows.length ? markdownTable(["CVE", "Package", "Status", "Severity", "Layer"], cveRows).trim() : "No critical or unpatched CVE rows were found in the loaded report.");
+  lines.push("");
+
+  lines.push("## Artifacts");
+  lines.push(`- Total: ${model.artifacts.length || Number(release.artifact_count || 0)}`);
+  lines.push(markdownTable(["Name", "Size", "SHA256"], model.artifacts.map((artifact) => [artifact.name || "", formatBytes(artifact.size_bytes), artifact.sha256 || ""])).trim());
+  lines.push("");
+
+  lines.push("## Regression vs previous tag");
+  if (!model.previous) {
+    lines.push("No previous release/RC tag found for comparison.");
+  } else {
+    lines.push(`- Baseline: ${md(releaseLabel(model.previous))}`);
+    lines.push(`- Target: ${md(releaseLabel(release))}`);
+    lines.push(model.regressions.length
+      ? markdownTable(["Level", "Check", "Value", "Detail"], model.regressions.map((alert) => [alert.level, alert.title, alert.value, alert.detail])).trim()
+      : "No regressions detected by dashboard checks.");
+  }
+  lines.push("");
+
+  lines.push("## Release layer tags");
+  lines.push(markdownTable(["Layer", "Present", "Tag", "Commit", "Branch"], (model.trace.rows || []).map((row) => [row.name, row.present ? "yes" : "no", row.tag || "", shortCommit(row.commit || ""), row.branch || ""])).trim());
+  lines.push("");
+  return lines.join("\n");
+}
+
+function buildReleaseReportHtml(release, detail = {}, cve = {}) {
+  const markdown = buildReleaseReportMarkdown(release, detail, cve);
+  const body = markdown
+    .split("\n")
+    .map((line) => {
+      if (line.startsWith("# ")) return `<h1>${escapeHtml(line.slice(2))}</h1>`;
+      if (line.startsWith("## ")) return `<h2>${escapeHtml(line.slice(3))}</h2>`;
+      if (line.startsWith("- ")) return `<p>${escapeHtml(line)}</p>`;
+      if (line.startsWith("| ")) return `<pre>${escapeHtml(line)}</pre>`;
+      return line ? `<p>${escapeHtml(line)}</p>` : "";
+    })
+    .join("\n");
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(releaseName(release))} report</title><style>body{font-family:system-ui,sans-serif;margin:32px;line-height:1.45;color:#111827}h1,h2{margin-top:24px}pre{background:#f8fafc;border:1px solid #d8e0e8;border-radius:6px;padding:8px;overflow:auto}p{margin:6px 0}</style></head><body>${body}</body></html>`;
+}
+
+function downloadTextFile(filename, content, type) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+
+function cveExportIssues(cve = {}) {
+  const issues = Array.isArray(cve.issues) ? cve.issues : [];
+  return [...issues].sort((a, b) => (
+    statusRank(a.status) - statusRank(b.status) ||
+    severityRank(a.severity) - severityRank(b.severity) ||
+    Number(b.scorev3 || 0) - Number(a.scorev3 || 0) ||
+    String(a.package || "").localeCompare(String(b.package || "")) ||
+    String(a.id || "").localeCompare(String(b.id || ""))
+  ));
+}
+
+function cveExportRows(release, cve = {}) {
+  return cveExportIssues(cve).map((issue) => ({
+    tag: release.tag || "",
+    build: release.artifact_label || release.id || "",
+    machine: release.machine || "",
+    manifest: release.kas_manifest || "",
+    commit: release.commit || "",
+    package: issue.package || "",
+    version: issue.version || "",
+    cve: issue.id || "",
+    cve_web: issue.link || "",
+    status: issue.status || "",
+    severity: issue.severity || "",
+    cvss_v3: issue.scorev3 || "",
+    cvss_v2: issue.scorev2 || "",
+    layer: issue.layer || "",
+    summary: issue.summary || issue.description || "",
+    detail: issue.detail || "",
+  }));
+}
+
+function csvCell(value) {
+  const text = String(value ?? "").replace(/\r?\n/g, " ");
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function buildFullCveCsv(release, cve = {}) {
+  const columns = [
+    "tag", "build", "machine", "manifest", "commit", "package", "version", "cve", "cve_web",
+    "status", "severity", "cvss_v3", "cvss_v2", "layer", "summary", "detail",
+  ];
+  const rows = cveExportRows(release, cve);
+  return [columns.join(","), ...rows.map((row) => columns.map((key) => csvCell(row[key])).join(","))].join("\n") + "\n";
+}
+
+function buildFullCveJson(release, cve = {}) {
+  const rows = cveExportRows(release, cve);
+  const payload = {
+    schema_version: 1,
+    exported_at_utc: new Date().toISOString(),
+    tag: release.tag || "",
+    build: release.artifact_label || release.id || "",
+    machine: release.machine || "",
+    manifest: release.kas_manifest || "",
+    commit: release.commit || "",
+    cve_report_available: Boolean(cve.available),
+    counts_by_status: cve.counts_by_status || {},
+    counts_by_severity: cve.counts_by_severity || release.cve_severity || {},
+    issue_count: rows.length,
+    columns: ["package", "version", "cve", "cve_web", "status", "severity", "cvss_v3", "cvss_v2", "layer", "summary", "detail"],
+    issues: rows,
+  };
+  return JSON.stringify(payload, null, 2) + "\n";
+}
+
+async function exportFullCve(releaseId, format = "csv") {
+  const release = releaseById(releaseId);
+  if (!release) return;
+  if (!release.cve_summary_path) {
+    alert("This build has no CVE report path.");
+    return;
+  }
+  const cve = await loadReleaseCve(release, { render: false }) || {};
+  if (cve.error) {
+    alert(`Could not export full CVE report: ${cve.error}`);
+    return;
+  }
+  const base = reportFileBase(release);
+  if (format === "json") {
+    downloadTextFile(`${base}-full-cve.json`, buildFullCveJson(release, cve), "application/json;charset=utf-8");
+  } else {
+    downloadTextFile(`${base}-full-cve.csv`, buildFullCveCsv(release, cve), "text/csv;charset=utf-8");
+  }
+}
+
+async function exportReleaseReport(releaseId, format = "markdown") {
+  const release = releaseById(releaseId);
+  if (!release) return;
+  const detail = await loadReleaseDetail(release, { render: false }) || {};
+  const cve = release.cve_summary_path ? await loadReleaseCve(release, { render: false }) || {} : {};
+  if (detail.error) {
+    alert(`Could not export report: ${detail.error}`);
+    return;
+  }
+  const base = reportFileBase(release);
+  if (format === "html") {
+    downloadTextFile(`${base}-release-report.html`, buildReleaseReportHtml(release, detail, cve), "text/html;charset=utf-8");
+  } else {
+    downloadTextFile(`${base}-release-report.md`, buildReleaseReportMarkdown(release, detail, cve), "text/markdown;charset=utf-8");
+  }
+}
+
+function bindReportExports(root = el.detailsPanel) {
+  root.querySelectorAll("[data-export-report]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const releaseId = button.dataset.releaseId || state.selectedId || "";
+      const format = button.dataset.exportReport || "markdown";
+      const previousText = button.textContent;
+      button.disabled = true;
+      button.textContent = format === "html" ? "Exporting HTML..." : "Exporting...";
+      exportReleaseReport(releaseId, format).finally(() => {
+        button.disabled = false;
+        button.textContent = previousText;
+      });
+    });
+  });
+}
+
+
+function bindCveExports(root = el.detailsPanel) {
+  root.querySelectorAll("[data-export-cve]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const releaseId = button.dataset.releaseId || state.selectedId || "";
+      const format = button.dataset.exportCve || "csv";
+      const previousText = button.textContent;
+      button.disabled = true;
+      button.textContent = format === "json" ? "Exporting JSON..." : "Exporting CSV...";
+      exportFullCve(releaseId, format).finally(() => {
+        button.disabled = false;
+        button.textContent = previousText;
+      });
+    });
+  });
+}
+
+
 function renderDetails() {
   const release = state.filtered.find((item) => item.id === state.selectedId);
   if (!release) {
@@ -1560,7 +2218,10 @@ function renderDetails() {
     el.detailsPanel.innerHTML = `<div class="details-panel">${renderLoadingNotice("Loading build metadata", "Loading release.json before rendering build details.", detail.path)}</div>`;
     return;
   }
+  if (state.tab === "review" && !isReleaseTag(release)) state.tab = "summary";
   ensureTabData(release);
+  ensureReviewData(release);
+  if (state.tab === "review") ensureReviewAuditData(release);
   const cve = state.cveDetails.get(release.id) || {};
   const packages = state.packageDetails.get(release.id) || {};
   const summary = release.cve_summary || {};
@@ -1578,6 +2239,8 @@ function renderDetails() {
           ${channelBadge(release.channel)}
           ${readinessBadge(release.flashing || flashingReadiness(detail))}
           ${cveBadge(summary)}
+          ${reviewBadge(release)}
+          ${isReleaseTag(release) ? `<button class="link-button" type="button" data-export-report="markdown" data-release-id="${escapeHtml(release.id)}">Export report</button><button class="link-button subtle" type="button" data-export-report="html" data-release-id="${escapeHtml(release.id)}">HTML</button><button class="link-button subtle" type="button" data-export-cve="csv" data-release-id="${escapeHtml(release.id)}">CVE CSV</button><button class="link-button subtle" type="button" data-export-cve="json" data-release-id="${escapeHtml(release.id)}">CVE JSON</button>` : ""}
           ${azureUrl ? `<a class="link-button" href="${escapeHtml(azureUrl)}" target="_blank" rel="noreferrer">Azure</a>` : ""}
         </div>
       </div>
@@ -1588,7 +2251,7 @@ function renderDetails() {
         <div class="metric"><span>Packages</span><strong>${Number(release.package_manifest?.package_count || packages.package_count || 0)}</strong></div>
         <div class="metric"><span>Unpatched CVEs</span><strong>${Number(summary.unpatched || 0)}</strong></div>
       </div>
-      ${renderTabs()}
+      ${renderTabs(release)}
       <div id="tabContent">${renderTabContent(release, detail, cve, packages)}</div>
     </div>
   `;
@@ -1600,16 +2263,20 @@ function renderDetails() {
   });
   bindCveControls();
   bindPackageControls();
+  bindReportExports();
+  bindCveExports();
+  bindReviewControls(release);
   bindBuildLinks();
 }
 
-function renderTabs() {
+function renderTabs(release) {
   const tabs = [
     ["summary", "Summary"],
     ["artifacts", "Artifacts"],
     ["packages", "Packages"],
     ["cves", "CVEs"],
     ["layers", "Layers"],
+    ...(isReleaseTag(release) ? [["review", "Review"]] : []),
     ["metadata", "Metadata"],
   ];
   return `<div class="tabs">${tabs.map(([id, label]) => (
@@ -1630,7 +2297,117 @@ function renderTabContent(release, detail, cve, packages) {
     return renderCves(cve, release);
   }
   if (state.tab === "layers") return renderLayers(detail.layers || [], release);
+  if (state.tab === "review") return renderReleaseReview(release);
   return renderMetadata(release, detail, cve);
+}
+
+function renderReleaseReview(release) {
+  if (!isReleaseTag(release)) return renderDataNotice("info", "Review applies to release tags", "Development builds do not have a release management checklist.");
+  const review = releaseReview(release);
+  const progress = reviewProgress(review);
+  const updated = reviewTimestampLabel(review.lastReviewedAt || review.updatedAt);
+  const sourceLabel = review.source === "database" ? "Saved in portal DB" : review.source === "local-fallback" ? "API unavailable, saved locally" : review.__loading ? "Loading portal review" : "Local draft";
+  return `<form class="review-form" data-review-form="${escapeHtml(release.id)}">
+    <div class="review-summary ${reviewStatusClass(review.status)}">
+      <div>
+        <span>Release decision</span>
+        <strong>${escapeHtml(review.status)} · ${progress.done}/${progress.total} checks</strong>
+      </div>
+      <div class="item-meta">Last reviewed: ${escapeHtml(updated)}${review.updatedBy ? ` by ${escapeHtml(review.updatedBy)}` : ""}<br>${escapeHtml(sourceLabel)}</div>
+    </div>
+    ${review.apiError ? `<div class="data-notice warn"><div class="data-notice-title">Portal API fallback</div><p>${escapeHtml(review.apiError)}</p></div>` : ""}
+    <div class="review-grid">
+      <label class="field">
+        <span>Status</span>
+        <select data-review-field="status">
+          ${["Draft", "Under review", "Blocked", "Approved", "Released"].map((status) => `<option value="${escapeHtml(status)}" ${review.status === status ? "selected" : ""}>${escapeHtml(status)}</option>`).join("")}
+        </select>
+      </label>
+      <label class="field">
+        <span>Owner</span>
+        <input data-review-field="owner" type="text" value="${escapeHtml(review.owner)}" placeholder="release owner">
+      </label>
+      <label class="field">
+        <span>Reviewer</span>
+        <input data-review-field="actor" type="text" value="${escapeHtml(currentReviewer(review.updatedBy || review.actor || review.owner))}" placeholder="who is updating this review" required>
+      </label>
+      <label class="field">
+        <span>Jira</span>
+        <input data-review-field="jira" type="url" value="${escapeHtml(review.jira)}" placeholder="https://...">
+      </label>
+    </div>
+    <div class="review-checklist">
+      ${RELEASE_REVIEW_CHECKS.map(([key, label, help]) => {
+        const meta = review.checkMeta?.[key] || {};
+        const stamp = meta.checkedAt ? reviewTimestampLabel(meta.checkedAt) : "";
+        const checkedBy = meta.checkedBy ? `Checked by ${escapeHtml(meta.checkedBy)}${stamp ? ` at ${escapeHtml(stamp)}` : ""}` : "Not checked";
+        const optional = OPTIONAL_RELEASE_REVIEW_CHECKS.has(key);
+        return `
+        <label class="review-check">
+          <input data-review-check="${escapeHtml(key)}" type="checkbox" ${review.checks[key] ? "checked" : ""}>
+          <span>
+            <strong>${escapeHtml(label)}${optional ? ' <span class="review-check-optional">optional</span>' : ""}</strong>
+            <small>${escapeHtml(help)}</small>
+            <small class="review-check-meta">${checkedBy}</small>
+          </span>
+        </label>`;
+      }).join("")}
+    </div>
+    <label class="field review-note">
+      <span>Decision note</span>
+      <textarea data-review-field="note" rows="4" placeholder="Review notes, risk acceptance, pending actions">${escapeHtml(review.note)}</textarea>
+    </label>
+    ${renderReviewAudit(release)}
+    <div class="review-actions">
+      <button class="link-button" type="submit">Save decision</button>
+      ${review.jira ? `<a class="link-button subtle" href="${escapeHtml(review.jira)}" target="_blank" rel="noreferrer">Open Jira</a>` : ""}
+      <span class="item-meta">Release key: ${escapeHtml(reviewIdentity(release) || release.id)}</span>
+    </div>
+  </form>`;
+}
+
+function bindReviewControls(release) {
+  const form = el.detailsPanel.querySelector("[data-review-form]");
+  if (!form || !isReleaseTag(release)) return;
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const valueFor = (name) => form.querySelector(`[data-review-field="${name}"]`)?.value?.trim() || "";
+    const actor = valueFor("actor");
+    if (!actor) {
+      alert("Reviewer name is required before saving a release decision.");
+      form.querySelector('[data-review-field="actor"]')?.focus();
+      return;
+    }
+    const button = form.querySelector('button[type="submit"]');
+    const previousText = button?.textContent || "Save decision";
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Saving...";
+    }
+    const checks = {};
+    form.querySelectorAll("[data-review-check]").forEach((input) => {
+      checks[input.dataset.reviewCheck] = input.checked;
+    });
+    const saved = await saveReleaseReview(release, {
+      status: valueFor("status") || "Draft",
+      owner: valueFor("owner"),
+      actor,
+      jira: valueFor("jira"),
+      note: valueFor("note"),
+      checks,
+    });
+    if (!saved) {
+      alert("Could not save the release review.");
+      if (button) {
+        button.disabled = false;
+        button.textContent = previousText;
+      }
+      return;
+    }
+    resetReviewAudit(release);
+    await loadReleaseAudit(release, { render: false });
+    renderDetails();
+  });
 }
 
 
