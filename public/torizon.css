@@ -1,0 +1,663 @@
+/* Torizon Cloud Theme Overrides */
+
+:root {
+  --t-bg: #f8f9fa; /* Light grey background for content */
+  --t-sidebar-bg: #1c2128; /* Dark navy/black for sidebar */
+  --t-sidebar-text: #adbac7;
+  --t-sidebar-text-active: #ffffff;
+  --t-sidebar-active-bg: #2d333b;
+  --t-topbar-bg: #22272e;
+  --t-border: #d0d7de;
+  --t-card-bg: #ffffff;
+  --t-text: #24292f;
+  --t-muted: #57606a;
+  --t-primary: #0969da;
+  --t-warning-bg: #fff8c5;
+  --t-warning-border: #e6cc13;
+  --t-warning-text: #9a6700;
+  --t-critical: #cf222e;
+  --t-high: #bc4c00;
+  --t-medium: #9a6700;
+  --t-low: #0969da;
+  --t-success: #1a7f37;
+}
+
+body.torizon-theme {
+  margin: 0;
+  padding: 0;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background-color: var(--t-bg);
+  color: var(--t-text);
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Sidebar */
+.torizon-sidebar {
+  width: 250px;
+  background-color: var(--t-sidebar-bg);
+  color: var(--t-sidebar-text);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  flex-shrink: 0;
+  overflow-y: auto;
+  border-right: 1px solid rgba(255,255,255,0.1);
+}
+
+.torizon-sidebar::-webkit-scrollbar {
+  width: 6px;
+}
+.torizon-sidebar::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.2);
+  border-radius: 4px;
+}
+
+.brand {
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #fff;
+  border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
+.sidebar-nav {
+  padding: 16px 0;
+  flex: 1;
+}
+
+.nav-section {
+  margin-bottom: 16px;
+}
+
+.nav-title {
+  padding: 8px 20px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #768390;
+  font-weight: 600;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  padding: 8px 20px;
+  color: var(--t-sidebar-text);
+  text-decoration: none;
+  font-size: 14px;
+  transition: all 0.2s ease;
+  justify-content: space-between;
+}
+
+.nav-item:hover {
+  background-color: rgba(255,255,255,0.05);
+  color: var(--t-sidebar-text-active);
+}
+
+.nav-item.active {
+  background-color: rgba(14, 118, 110, 0.2);
+  color: #14b8a6;
+  border-left: 3px solid #14b8a6;
+}
+
+.nav-item.active-sub {
+  background-color: rgba(255,255,255,0.1);
+  color: #fff;
+}
+
+.nav-item .icon {
+  margin-right: 12px;
+  font-size: 16px;
+}
+
+.badge {
+  background: #14b8a6;
+  color: #fff;
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 10px;
+  font-weight: bold;
+}
+.badge.gray {
+  background: #444c56;
+  color: #adbac7;
+}
+
+.sidebar-promo {
+  padding: 20px;
+}
+.promo-box {
+  background: rgba(20, 184, 166, 0.1);
+  border: 1px solid rgba(20, 184, 166, 0.2);
+  border-radius: 8px;
+  padding: 16px;
+  text-align: center;
+}
+.promo-icon {
+  font-size: 24px;
+  margin-bottom: 8px;
+  color: #14b8a6;
+}
+.promo-box p {
+  margin: 0 0 12px 0;
+  font-size: 13px;
+  color: #fff;
+}
+.promo-btn {
+  background: #14b8a6;
+  color: #fff;
+  border: none;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  font-weight: 500;
+}
+.promo-btn:hover { background: #0f766e; }
+
+/* Main Wrapper & Topbar */
+.torizon-main-wrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.torizon-topbar {
+  background-color: var(--t-topbar-bg);
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--t-border);
+}
+
+.search-container {
+  display: flex;
+  align-items: center;
+  background: #373e47;
+  border-radius: 4px;
+  padding: 0 12px;
+  width: 400px;
+  height: 36px;
+}
+.search-icon { color: #8b949e; margin-right: 8px; }
+.top-search {
+  background: transparent;
+  border: none;
+  color: #fff;
+  flex: 1;
+  font-size: 14px;
+  outline: none;
+}
+.top-search::placeholder { color: #8b949e; }
+.search-sparkle { color: #8b949e; font-size: 12px; }
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.topbar-btn {
+  background: transparent;
+  border: none;
+  color: #adbac7;
+  font-size: 13px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.topbar-icon {
+  background: transparent;
+  border: none;
+  color: #adbac7;
+  font-size: 16px;
+  cursor: pointer;
+}
+.topbar-icon:hover, .topbar-btn:hover { color: #fff; }
+
+.user-profile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 10px;
+}
+.avatar {
+  width: 32px;
+  height: 32px;
+  background: #539bf5;
+  color: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+}
+.user-info {
+  display: flex;
+  flex-direction: column;
+}
+.user-name { font-size: 13px; color: #fff; font-weight: 500; }
+.user-repo { font-size: 11px; color: #8b949e; }
+
+/* Main Content Area */
+.torizon-content {
+  flex: 1;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.breadcrumbs {
+  font-size: 13px;
+  color: #57606a;
+  margin-bottom: 16px;
+}
+.bc-active { color: var(--t-text); font-weight: 500; }
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+.page-title {
+  margin: 0 0 4px 0;
+  font-size: 24px;
+  font-weight: 600;
+}
+.btn-primary {
+  background: #ffffff;
+  border: 1px solid #0969da;
+  color: #0969da;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+.btn-primary:hover {
+  background: #0969da;
+  color: #fff;
+}
+
+/* Filters Bar */
+.torizon-filters-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  background: var(--t-card-bg);
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid var(--t-border);
+  margin-bottom: 24px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+.filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.filter-field span {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--t-muted);
+}
+.filter-field input, .filter-field select {
+  padding: 6px 12px;
+  border: 1px solid var(--t-border);
+  border-radius: 4px;
+  font-size: 13px;
+  min-width: 150px;
+}
+.btn-secondary {
+  align-self: flex-end;
+  background: transparent;
+  border: 1px solid var(--t-border);
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  height: 31px;
+}
+.btn-secondary:hover { background: #f3f4f6; }
+
+/* Tabs */
+.torizon-view-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--t-border);
+  margin-bottom: 24px;
+}
+.t-view-tab {
+  background: transparent;
+  border: none;
+  padding: 12px 24px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--t-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+.t-view-tab:hover { color: var(--t-text); }
+.t-view-tab.active {
+  color: #0969da;
+  border-bottom-color: #0969da;
+}
+
+/* Cards & Grid */
+.torizon-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-bottom: 24px;
+}
+
+.torizon-card {
+  background: var(--t-card-bg);
+  border: 1px solid var(--t-border);
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  margin-bottom: 24px;
+  overflow: hidden;
+}
+
+.card-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--t-border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #fcfcfc;
+}
+.card-header h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+.card-body {
+  padding: 20px;
+}
+.card-body.p-0 {
+  padding: 0;
+}
+
+/* Security Analysis Alert style */
+.security-alert {
+  background-color: var(--t-warning-bg);
+  border: 1px solid var(--t-warning-border);
+  border-radius: 6px;
+  padding: 16px;
+  margin-bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.security-alert-msg {
+  color: var(--t-warning-text);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cve-stats {
+  display: flex;
+  gap: 24px;
+}
+.cve-stat {
+  display: flex;
+  flex-direction: column;
+  border-left: 2px solid transparent;
+  padding-left: 12px;
+}
+.cve-stat.total { border-color: var(--t-success); }
+.cve-stat.critical { border-color: var(--t-critical); }
+.cve-stat.high { border-color: var(--t-warning-text); }
+
+.cve-stat-val {
+  font-size: 24px;
+  font-weight: 700;
+}
+.cve-stat.total .cve-stat-val { color: var(--t-success); }
+.cve-stat.critical .cve-stat-val { color: var(--t-critical); }
+.cve-stat.high .cve-stat-val { color: var(--t-warning-text); }
+
+.cve-stat-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--t-muted);
+  font-weight: 600;
+}
+
+/* Base override for existing components if needed */
+.badge-count {
+  background: #eef2f6;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.t-channel-tabs {
+  display: flex;
+  gap: 4px;
+  background: #f1f5f9;
+  padding: 4px;
+  border-radius: 6px;
+}
+.t-channel-tab {
+  background: transparent;
+  border: none;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--t-muted);
+}
+.t-channel-tab.active {
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+  color: var(--t-text);
+  font-weight: 500;
+}
+
+/* --- Torizon CVE Accordion Table --- */
+.torizon-cve-list {
+  background: var(--t-card-bg);
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--t-border);
+}
+
+.t-cve-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+}
+
+.t-cve-table th {
+  padding: 12px 16px;
+  border-bottom: 2px solid var(--t-border);
+  color: var(--t-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 11px;
+}
+
+.t-cve-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--t-border);
+  vertical-align: top;
+}
+
+.t-cve-row {
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.t-cve-row:hover {
+  background: #f8f9fa;
+}
+
+.t-cve-caret {
+  text-align: center;
+  color: var(--t-muted);
+}
+.caret-icon {
+  display: inline-block;
+  transition: transform 0.2s;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.t-cve-id {
+  font-weight: 500;
+  color: var(--t-text);
+}
+
+.t-cve-analysis {
+  color: #8b949e;
+}
+.analysis-icon {
+  margin-right: 4px;
+}
+
+.t-cve-justification {
+  color: var(--t-muted);
+}
+
+.t-cve-details-row {
+  background-color: #fafbfc;
+}
+.t-cve-details-row.hidden {
+  display: none;
+}
+.t-cve-details-row td {
+  padding: 0;
+  border-bottom: 1px solid var(--t-border);
+}
+
+.t-cve-details-content {
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.t-cve-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0 0 12px 0;
+  color: var(--t-text);
+  border-bottom: 1px solid var(--t-border);
+  padding-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.t-cve-analysis-box {
+  background: var(--t-card-bg);
+  padding: 12px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--t-border);
+  display: inline-block;
+}
+
+.t-cve-info-content p {
+  margin: 0 0 12px 0;
+  line-height: 1.5;
+}
+
+.t-code-badge {
+  background: #eff3f8;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+  font-size: 12px;
+  color: var(--t-text);
+}
+
+.t-cve-link {
+  color: var(--t-primary);
+  text-decoration: none;
+  font-weight: 500;
+  display: inline-block;
+  margin-top: 8px;
+}
+.t-cve-link:hover {
+  text-decoration: underline;
+}
+
+.t-cve-empty {
+  text-align: center;
+  padding: 32px !important;
+  color: var(--t-muted);
+}
+
+/* --- Torizon CVE Overview Panel --- */
+.cve-overview {
+  background: var(--t-card-bg);
+  border: 1px solid var(--t-border);
+  border-radius: 8px;
+  padding: 24px;
+  margin-bottom: 24px;
+}
+.cve-overview-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+}
+.cve-overview-head h2 {
+  font-size: 18px;
+  margin: 0;
+  font-weight: 600;
+}
+.sbom-download-link {
+  color: var(--t-primary);
+  cursor: pointer;
+  font-weight: 500;
+  text-decoration: underline;
+}
+.cve-overview-body {
+  display: flex;
+  gap: 40px;
+  align-items: center;
+}
+.cve-overview-counts {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.cve-ov-count {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.cve-ov-label {
+  width: 100px;
+  font-size: 14px;
+  color: var(--t-muted);
+}
+.cve-ov-value {
+  font-size: 16px;
+  font-weight: 600;
+}
+.cve-ov-count.critical .cve-ov-value { color: var(--t-critical); }
+.cve-ov-count.high .cve-ov-value { color: var(--t-high); }
+.cve-ov-count.total .cve-ov-value { color: var(--t-text); }
+

@@ -1,101 +1,20 @@
-const state = {
-  index: null,
-  loadError: null,
-  releases: [],
-  filtered: [],
-  selectedId: null,
-  compareBaseId: null,
-  compareTargetId: null,
-  compareRequested: false,
-  activeChannel: "release",
-  activeView: "overview",
-  details: new Map(),
-  cveDetails: new Map(),
-  packageDetails: new Map(),
-  reviews: new Map(),
-  reviewAudits: new Map(),
-  tab: "summary",
-  cveRowStatus: "all",
-  cveRowSeverity: "all",
-  cveRowPackage: "all",
-  cveRowQuery: "",
-  packageQuery: "",
-  sortKey: "date",
-  sortDirection: "desc",
-};
-
-const el = {
-  indexStatus: document.getElementById("indexStatus"),
-  refreshButton: document.getElementById("refreshButton"),
-  searchInput: document.getElementById("searchInput"),
-  machineFilter: document.getElementById("machineFilter"),
-  channelFilter: document.getElementById("channelFilter"),
-  cveFilter: document.getElementById("cveFilter"),
-  severityFilter: document.getElementById("severityFilter"),
-  clearFilters: document.getElementById("clearFilters"),
-  stats: document.getElementById("stats"),
-  viewTabs: document.querySelectorAll(".view-tab"),
-  overviewView: document.getElementById("overviewView"),
-  attentionView: document.getElementById("attentionView"),
-  compareView: document.getElementById("compareView"),
-  lineageView: document.getElementById("lineageView"),
-  channelTabs: document.querySelectorAll(".channel-tab"),
-  healthStamp: document.getElementById("healthStamp"),
-  healthGrid: document.getElementById("healthGrid"),
-  regressionStatus: document.getElementById("regressionStatus"),
-  regressionAlerts: document.getElementById("regressionAlerts"),
-  attentionStatus: document.getElementById("attentionStatus"),
-  attentionQueue: document.getElementById("attentionQueue"),
-  lineageStatus: document.getElementById("lineageStatus"),
-  lineageTree: document.getElementById("lineageTree"),
-  compareStatus: document.getElementById("compareStatus"),
-  compareBase: document.getElementById("compareBase"),
-  compareTarget: document.getElementById("compareTarget"),
-  compareSwap: document.getElementById("compareSwap"),
-  compareOutput: document.getElementById("compareOutput"),
-  latestList: document.getElementById("latestList"),
-  releaseListTitle: document.getElementById("releaseListTitle"),
-  releaseCount: document.getElementById("releaseCount"),
-  releaseTable: document.getElementById("releaseTable"),
-  detailsEmpty: document.getElementById("detailsEmpty"),
-  detailsPanel: document.getElementById("detailsPanel"),
-};
-
-const REQUIRED_RELEASE_LAYER_NAMES = [
-  "meta-northfi-distro",
-  "meta-arquimea-distro-base",
-  "meta-layout-base",
-  "meta-arquimea-security",
-];
-
-const REVIEW_STORAGE_KEY = "northfi.releaseReviews.v1";
-const REVIEW_ACTOR_STORAGE_KEY = "northfi.currentReviewer";
-
-const RELEASE_REVIEW_CHECKS = [
-  ["cve_reviewed", "CVEs reviewed", "Open CVEs were inspected and accepted or assigned."],
-  ["full_cve_export_reviewed", "Full CVE export reviewed", "CSV/JSON export was generated and reviewed."],
-  ["artifacts_verified", "Artifacts verified", "Boot, WIC, BMAP, and SWU artifacts are present."],
-  ["flashing_tested", "Flashing tested", "Image was flashed or test evidence was attached."],
-  ["dev_origins_confirmed", "Dev origins confirmed", "Linked development builds match the released tag."],
-  ["layer_tags_verified", "Layer tags verified", "Required release layer tags are present."],
-  ["regression_reviewed", "Regression reviewed", "Latest-vs-previous regression alerts were checked."],
-  ["jira_linked", "Jira linked", "Optional release or security tracking ticket is linked."],
-];
-const OPTIONAL_RELEASE_REVIEW_CHECKS = new Set(["jira_linked"]);
-
-function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>'"]/g, (char) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "'": "&#39;",
-    '"': "&quot;",
-  }[char]));
-}
-
-function shortCommit(commit) {
-  return commit ? commit.slice(0, 12) : "";
-}
+import {
+  OPTIONAL_RELEASE_REVIEW_CHECKS,
+  RELEASE_REVIEW_CHECKS,
+  REQUIRED_RELEASE_LAYER_NAMES,
+  REVIEW_ACTOR_STORAGE_KEY,
+  REVIEW_STORAGE_KEY,
+} from "./config.js";
+import {
+  fetchJson,
+  loadErrorMessage,
+  loadErrorTitle,
+  loadingState,
+  normalizeLoadError,
+  storedLoadError,
+} from "./data.js";
+import { escapeHtml, shortCommit } from "./format.js";
+import { el, state } from "./state.js";
 
 function releaseLabel(release) {
   if (!release) return "";
@@ -291,6 +210,17 @@ function flashingReadiness(detail = {}) {
   return { ready, hasBoot, hasWic, hasBmap, hasSwu };
 }
 
+function inferPackageType(release, detail = {}) {
+  const names = [...artifactNames(detail), release.artifact_label || "", release.tag || "", release.kas_manifest || "", release.id || ""];
+  const text = names.filter(Boolean).join(" ").toLowerCase();
+  if (text.includes("ostree")) return "OSTREE";
+  if (text.includes("swupdate") || text.includes(".swu")) return "SWUpdate Image";
+  if (text.includes("image") || text.includes("rootfs")) return "Image";
+  if (release.flashing?.hasSwu) return "SWUpdate Image";
+  if (text.includes("container") || text.includes("docker") || text.includes("torizon")) return "Container";
+  return "Build Artifact";
+}
+
 function readinessBadge(readiness) {
   if (!readiness) return `<span class="badge unknown">Not checked</span>`;
   return readiness.ready ? `<span class="badge ok">Flashing ready</span>` : `<span class="badge warn">Incomplete</span>`;
@@ -316,53 +246,6 @@ function cveBadge(cve) {
   const unpatched = Number(cve.unpatched || 0);
   if (unpatched > 0) return `<span class="badge danger">${unpatched} unpatched</span>`;
   return `<span class="badge ok">No unpatched</span>`;
-}
-
-function normalizeLoadError(error, path = "", fallbackKind = "load") {
-  if (error && typeof error === "object") {
-    return {
-      kind: error.kind || error.errorKind || fallbackKind,
-      path: error.path || path || "",
-      status: error.status || "",
-      message: error.message || error.error || "Unknown data load error",
-      detail: error.detail || "",
-    };
-  }
-  return { kind: fallbackKind, path, status: "", message: String(error || "Unknown data load error"), detail: "" };
-}
-
-function storedLoadError(path, error, fallbackKind = "load") {
-  const normalized = normalizeLoadError(error, path, fallbackKind);
-  return {
-    error: normalized.message,
-    errorKind: normalized.kind,
-    path: normalized.path,
-    status: normalized.status,
-    detail: normalized.detail,
-  };
-}
-
-function loadingState(path, label) {
-  return { __loading: true, path, label };
-}
-
-function loadErrorTitle(error) {
-  const normalized = normalizeLoadError(error);
-  if (normalized.kind === "missing" || normalized.kind === "missing-index") return "Data file not found";
-  if (normalized.kind === "invalid-json") return "JSON could not be parsed";
-  if (normalized.kind === "network") return "Data request failed";
-  if (normalized.kind === "empty-index") return "No builds indexed";
-  return "Data could not be loaded";
-}
-
-function loadErrorMessage(error) {
-  const normalized = normalizeLoadError(error);
-  if (normalized.kind === "missing-index") return "No dashboard index file is available. Check that the dashboard indexer has generated releases/index.json, development/index.json, or the legacy releases-index.json.";
-  if (normalized.kind === "missing") return "The expected data file is missing from the dashboard data directory.";
-  if (normalized.kind === "invalid-json") return "The file was found, but its contents are not valid JSON. Regenerate the dashboard index or the affected metadata artifact.";
-  if (normalized.kind === "network") return "The browser could not complete the request for this data file.";
-  if (normalized.kind === "empty-index") return "The dashboard index loaded successfully, but it contains zero builds.";
-  return normalized.message || "The dashboard could not load this data.";
 }
 
 function renderDataNotice(type, title, message, rows = []) {
@@ -394,32 +277,6 @@ function severityClass(severity, status) {
   if (severity === "critical" || severity === "high") return "warn";
   if (status === "Patched") return "ok";
   return "unknown";
-}
-
-async function fetchJson(path) {
-  let response;
-  try {
-    const separator = path.includes("?") ? "&" : "?";
-    response = await fetch(`${path}${separator}ts=${Date.now()}`, { cache: "no-store" });
-  } catch (error) {
-    throw { kind: "network", path, message: `Request failed for ${path}: ${error.message || error}` };
-  }
-
-  if (!response.ok) {
-    throw {
-      kind: response.status === 404 ? "missing" : "http",
-      path,
-      status: response.status,
-      message: `${response.status} ${response.statusText}: ${path}`,
-    };
-  }
-
-  const text = await response.text();
-  try {
-    return JSON.parse(text);
-  } catch (error) {
-    throw { kind: "invalid-json", path, message: `Invalid JSON in ${path}: ${error.message || error}` };
-  }
 }
 
 function summarizeIndexFailures(results, paths) {
@@ -1519,7 +1376,7 @@ function ensureTabData(release) {
     loadReleaseDetail(release);
     return;
   }
-  if (state.tab === "cves" && release.cve_summary_path && !state.cveDetails.has(release.id)) {
+  if ((state.tab === "summary" || state.tab === "security" || state.tab === "metadata") && release.cve_summary_path && !state.cveDetails.has(release.id)) {
     loadReleaseCve(release);
   }
   if (state.tab === "packages" && release.package_manifest_path && !state.packageDetails.has(release.id)) {
@@ -2226,6 +2083,9 @@ function renderDetails() {
   const packages = state.packageDetails.get(release.id) || {};
   const summary = release.cve_summary || {};
   const azureUrl = azureBuildUrl(release, detail);
+  const sbom = detail.sbom || release.sbom || {};
+  const sbomBundlePath = sbom.bundle?.path || "";
+  const cyclonedxPath = sbom.cyclonedx?.path || "";
 
   el.detailsPanel.innerHTML = `
     <div class="details-panel">
@@ -2240,6 +2100,8 @@ function renderDetails() {
           ${readinessBadge(release.flashing || flashingReadiness(detail))}
           ${cveBadge(summary)}
           ${reviewBadge(release)}
+          ${cyclonedxPath ? `<a class="link-button subtle" href="data/${escapeHtml(cyclonedxPath)}" download>CycloneDX</a>` : ""}
+          ${sbomBundlePath ? `<a class="link-button subtle" href="data/${escapeHtml(sbomBundlePath)}" download>SPDX</a>` : ""}
           ${isReleaseTag(release) ? `<button class="link-button" type="button" data-export-report="markdown" data-release-id="${escapeHtml(release.id)}">Export report</button><button class="link-button subtle" type="button" data-export-report="html" data-release-id="${escapeHtml(release.id)}">HTML</button><button class="link-button subtle" type="button" data-export-cve="csv" data-release-id="${escapeHtml(release.id)}">CVE CSV</button><button class="link-button subtle" type="button" data-export-cve="json" data-release-id="${escapeHtml(release.id)}">CVE JSON</button>` : ""}
           ${azureUrl ? `<a class="link-button" href="${escapeHtml(azureUrl)}" target="_blank" rel="noreferrer">Azure</a>` : ""}
         </div>
@@ -2249,6 +2111,7 @@ function renderDetails() {
         <div class="metric"><span>Machine</span><strong>${escapeHtml(release.machine || "")}</strong></div>
         <div class="metric"><span>Artifacts</span><strong>${Number(release.artifact_count || detail.artifacts?.length || 0)}</strong></div>
         <div class="metric"><span>Packages</span><strong>${Number(release.package_manifest?.package_count || packages.package_count || 0)}</strong></div>
+        <div class="metric"><span>SBOM docs</span><strong>${Number(sbom.document_count || 0)}</strong></div>
         <div class="metric"><span>Unpatched CVEs</span><strong>${Number(summary.unpatched || 0)}</strong></div>
       </div>
       ${renderTabs(release)}
@@ -2258,6 +2121,34 @@ function renderDetails() {
   el.detailsPanel.querySelectorAll(".tab-button").forEach((button) => {
     button.addEventListener("click", () => {
       state.tab = button.dataset.tab;
+      renderDetails();
+    });
+  });
+  el.detailsPanel.querySelectorAll("[data-toggle-security-expand]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.securityExpanded = !state.securityExpanded;
+      if (release.cve_summary_path && !state.cveDetails.has(release.id)) {
+        loadReleaseCve(release);
+      } else {
+        renderDetails();
+      }
+    });
+  });
+  el.detailsPanel.querySelectorAll("[data-cve-bd-severity]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.cveRowSeverity = button.dataset.cveBdSeverity;
+      renderDetails();
+    });
+  });
+  el.detailsPanel.querySelectorAll("[data-cve-bd-status]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.cveRowStatus = button.dataset.cveBdStatus;
+      renderDetails();
+    });
+  });
+  el.detailsPanel.querySelectorAll("[data-cve-bd-search]").forEach((input) => {
+    input.addEventListener("change", () => {
+      state.cveRowQuery = input.value || "";
       renderDetails();
     });
   });
@@ -2272,9 +2163,10 @@ function renderDetails() {
 function renderTabs(release) {
   const tabs = [
     ["summary", "Summary"],
+    ["security", "Security"],
     ["artifacts", "Artifacts"],
     ["packages", "Packages"],
-    ["cves", "CVEs"],
+    ["sbom", "SBOM"],
     ["layers", "Layers"],
     ...(isReleaseTag(release) ? [["review", "Review"]] : []),
     ["metadata", "Metadata"],
@@ -2287,17 +2179,17 @@ function renderTabs(release) {
 function renderTabContent(release, detail, cve, packages) {
   if (detail.error) return renderLoadError("Could not load release.json", detail);
   if (state.tab === "summary") return renderSummary(release, detail, cve);
+  if (state.tab === "security") return renderSecurity(release, detail, cve);
   if (state.tab === "artifacts") return renderArtifacts(detail.artifacts || []);
   if (state.tab === "packages") {
     if (release.package_manifest_path && !state.packageDetails.has(release.id)) return renderLoadingNotice("Loading package manifest", "Package manifests load only when this tab is opened.", `data/${release.package_manifest_path}`);
     return renderPackages(packages, release);
   }
-  if (state.tab === "cves") {
-    if (release.cve_summary_path && !state.cveDetails.has(release.id)) return renderLoadingNotice("Loading CVE report", "CVE reports load only when this tab is opened or during compare.", `data/${release.cve_summary_path}`);
-    return renderCves(cve, release);
-  }
+  if (state.tab === "cves") { state.tab = "security"; return renderSecurity(release, detail, cve); }
+  if (state.tab === "sbom") return renderSbom(release, detail);
   if (state.tab === "layers") return renderLayers(detail.layers || [], release);
   if (state.tab === "review") return renderReleaseReview(release);
+  if (release.cve_summary_path && !state.cveDetails.has(release.id)) return renderLoadingNotice("Loading CVE metadata", "Metadata includes CVE source report paths from cve-summary.json.", `data/${release.cve_summary_path}`);
   return renderMetadata(release, detail, cve);
 }
 
@@ -2472,12 +2364,10 @@ function bindBuildLinks(root = el.detailsPanel) {
 }
 
 function renderSummary(release, detail, cve) {
-  const summary = release.cve_summary || {};
   const azureUrl = azureBuildUrl(release, detail);
   const id = buildId(release, detail);
   const published = detail.published_artifacts || release.published_artifacts || {};
   const smoke = smokeStatus(detail);
-  const severity = cve.counts_by_severity || release.cve_severity || {};
   const readiness = release.flashing || flashingReadiness(detail);
   return `<div class="list-block">
     <div class="item">
@@ -2495,17 +2385,219 @@ function renderSummary(release, detail, cve) {
       <div class="item-meta">Boot: ${readiness.hasBoot ? "yes" : "no"} | WIC: ${readiness.hasWic ? "yes" : "no"} | BMAP: ${readiness.hasBmap ? "yes" : "no"} | SWU: ${readiness.hasSwu ? "yes" : "no"}</div>
     </div>
     <div class="item">
-      <div class="item-head"><div class="item-title">CVE posture</div>${cveBadge(summary)}</div>
-      <div class="item-meta">Packages with issues: ${Number(summary.packages_with_issues || 0)}</div>
-      <div class="item-meta">Packages with unpatched: ${Number(summary.packages_with_unpatched || 0)}</div>
-      <div class="item-meta">Critical: ${Number(severity.critical || 0)} | High: ${Number(severity.high || 0)} | Medium: ${Number(severity.medium || 0)}</div>
-    </div>
-    <div class="item">
       <div class="item-title">Published artifacts</div>
       <div class="item-meta">Images: ${escapeHtml(published.images || "not recorded")}</div>
       <div class="item-meta">Metadata: ${escapeHtml(published.metadata || "not recorded")}</div>
       <div class="item-meta">Release metadata: ${escapeHtml(published.release_metadata || "not recorded")}</div>
     </div>
+  </div>`;
+}
+
+function renderSecurity(release, detail, cve) {
+  const summary = release.cve_summary || {};
+  const severity = cve.counts_by_severity || release.cve_severity || {};
+  const totalCves = Array.isArray(cve.issues) ? cve.issues.length : 0;
+  const cveAvailable = Boolean(summary.available);
+  const criticalCount = Number(severity.critical || 0);
+  const highCount = Number(severity.high || 0);
+  const hasCveWarning = cveAvailable && (Number(summary.unpatched || 0) > 0 || criticalCount > 0);
+  const issues = Array.isArray(cve.issues) ? cve.issues : [];
+  const expanded = state.securityExpanded && cveAvailable && issues.length;
+
+  let detailsHtml = "";
+  if (expanded) {
+    detailsHtml = `
+      ${renderSecurityOverviewPanel(issues, release)}
+      ${renderCveBreakdown(issues, release)}
+    `;
+  } else if (cveAvailable && !issues.length) {
+    detailsHtml = renderDataNotice("info", "CVE report is clean", "The CVE report is present and has no issues.");
+  } else if (!cveAvailable) {
+    detailsHtml = renderDataNotice("warn", "CVE report not available", "No CVE report was found for this build.");
+  }
+
+  return `<div class="list-block">
+    <div class="security-analysis">
+      <div class="security-head">
+        <div class="security-title-row">
+          <h3>Security Analysis</h3>
+          ${cveAvailable
+            ? (hasCveWarning
+              ? `<span class="security-badge danger">Attention Required</span>`
+              : `<span class="security-badge ok">No Issues</span>`)
+            : `<span class="security-badge unknown">No Report</span>`}
+        </div>
+        ${hasCveWarning
+          ? `<div class="security-warning">
+              <p>This version has critical vulnerabilities. Review recommended.</p>
+            </div>`
+          : cveAvailable
+            ? `<div class="security-clean"><p>No critical or unpatched vulnerabilities detected.</p></div>`
+            : `<div class="security-warning warn"><p>CVE report is not available for this build.</p></div>`}
+      </div>
+      ${cveAvailable ? `<div class="security-cve-counts">
+        <div class="cve-count-item total">
+          <span class="cve-count-label">TOTAL CVES</span>
+          <strong class="cve-count-value">${totalCves}</strong>
+        </div>
+        <div class="cve-count-item critical">
+          <span class="cve-count-label">CRITICAL</span>
+          <strong class="cve-count-value">${criticalCount}</strong>
+        </div>
+        <div class="cve-count-item high">
+          <span class="cve-count-label">HIGH</span>
+          <strong class="cve-count-value">${highCount}</strong>
+        </div>
+        <div class="security-cve-actions">
+          <button class="link-button view-full-cve-btn" type="button" data-toggle-security-expand>${expanded ? "Hide Full CVE Analysis" : "View Full CVE Analysis"}</button>
+          <button class="link-button subtle" type="button" data-export-cve="csv" data-release-id="${escapeHtml(release.id)}">Download CVE Report</button>
+        </div>
+      </div>` : ""}
+    </div>
+    <div class="package-meta-grid">
+      <div class="package-meta-item">
+        <span class="package-meta-label">Supported Component</span>
+        <strong class="package-meta-value">${escapeHtml(release.machine || "—")}</strong>
+      </div>
+      <div class="package-meta-item">
+        <span class="package-meta-label">Source</span>
+        <strong class="package-meta-value">${escapeHtml(release.kas_manifest || release.channel || "—")}</strong>
+      </div>
+      <div class="package-meta-item">
+        <span class="package-meta-label">Package Type</span>
+        <strong class="package-meta-value">${escapeHtml(inferPackageType(release, detail))}</strong>
+      </div>
+      <div class="package-meta-item">
+        <span class="package-meta-label">Hash</span>
+        <strong class="package-meta-value mono">${escapeHtml(release.commit || "—")}</strong>
+      </div>
+    </div>
+    ${detailsHtml}
+  </div>`;
+}
+
+function renderSecurityOverviewPanel(issues, release) {
+  const severity = countBySeverity(issues);
+  const total = issues.length;
+  const critical = Number(severity.critical || 0);
+  const high = Number(severity.high || 0);
+  const unpatchedCount = countUnpatchedIssues(issues);
+
+  return `<div class="cve-overview">
+    <div class="cve-overview-head">
+      <h2>CVEs Overview</h2>
+      <div class="cve-overview-actions">
+        <span class="sbom-download-link" data-export-cve="csv" data-release-id="${escapeHtml(release.id)}">Download SBOM (CycloneDX+VEX)</span>
+      </div>
+    </div>
+    <div class="cve-overview-body">
+      ${renderCveDonutChart(issues)}
+      <div class="cve-overview-counts">
+        <div class="cve-ov-count total">
+          <span class="cve-ov-label">Total</span>
+          <strong class="cve-ov-value">${total}</strong>
+        </div>
+        <div class="cve-ov-count critical">
+          <span class="cve-ov-label">Critical</span>
+          <strong class="cve-ov-value">${critical}</strong>
+        </div>
+        <div class="cve-ov-count high">
+          <span class="cve-ov-label">High</span>
+          <strong class="cve-ov-value">${high}</strong>
+        </div>
+        <div class="cve-ov-count">
+          <span class="cve-ov-label">Vulnerable</span>
+          <strong class="cve-ov-value">${unpatchedCount}</strong>
+        </div>
+        <div class="cve-ov-count warning">
+          <span class="cve-ov-label">Exploited</span>
+          <strong class="cve-ov-value">0</strong>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderCveBreakdown(issues, release) {
+  const severities = sortedSeverities(issues);
+  const statuses = sortedStatuses(issues);
+  const searchQuery = (state.cveRowQuery || "").trim().toLowerCase();
+
+  const filtered = issues.filter((issue) => {
+    if (state.cveRowSeverity !== "all" && normalizedSeverity(issue) !== state.cveRowSeverity) return false;
+    if (state.cveRowStatus !== "all" && normalizedStatus(issue) !== state.cveRowStatus) return false;
+    if (state.cveRowPackage !== "all" && issue.package !== state.cveRowPackage) return false;
+    if (searchQuery && !issueSearchText(issue).includes(searchQuery)) return false;
+    return true;
+  });
+
+  const sorted = [...filtered].sort((a, b) => (
+    statusRank(a.status) - statusRank(b.status) ||
+    severityRank(a.severity) - severityRank(b.severity) ||
+    Number(b.scorev3 || 0) - Number(a.scorev3 || 0)
+  ));
+  const visible = sorted.slice(0, 100);
+  const hidden = sorted.length - visible.length;
+
+  return `<div class="torizon-cve-list">
+    <table class="t-cve-table">
+      <thead>
+        <tr>
+          <th style="width: 40px"></th>
+          <th>CVE ID</th>
+          <th>Component</th>
+          <th>Severity ↓</th>
+          <th>Score</th>
+          <th>Analysis</th>
+          <th>Justification</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${visible.map((issue) => {
+          const sev = escapeHtml(issue.severity || "Unknown");
+          const score = escapeHtml(issue.scorev3 || "N/A");
+          const component = `${escapeHtml(issue.package || "unknown")} (${escapeHtml(issue.version || "")})`;
+          const analysisStr = escapeHtml(issue.status || "Awaiting Triage");
+          
+          return `
+          <tr class="t-cve-row" data-cve-toggle-target="${escapeHtml(issue.id)}">
+            <td class="t-cve-caret"><span class="caret-icon">›</span></td>
+            <td class="t-cve-id">${escapeHtml(issue.id)}</td>
+            <td>${component}</td>
+            <td>${sev}</td>
+            <td>${score}</td>
+            <td class="t-cve-analysis"><span class="analysis-icon">⚠</span> ${analysisStr}</td>
+            <td><span class="t-cve-justification">....................</span></td>
+          </tr>
+          <tr class="t-cve-details-row hidden" id="cve-details-${escapeHtml(issue.id)}">
+            <td colspan="7">
+              <div class="t-cve-details-content">
+                <div class="t-cve-section">
+                  <h4 class="t-cve-section-title">CVE Analysis ℹ️</h4>
+                  <div class="t-cve-analysis-box">
+                    <strong>Current Status:</strong><br>
+                    <span class="analysis-icon">⚠</span> ${analysisStr}
+                  </div>
+                </div>
+                
+                <div class="t-cve-section">
+                  <h4 class="t-cve-section-title">CVE Information ℹ️</h4>
+                  <div class="t-cve-info-content">
+                    <p><strong>Description:</strong><br>${escapeHtml(issue.summary || issue.description || "")}</p>
+                    <p><strong>Severity:</strong><br>${sev} (CVSS Score: ${score})</p>
+                    <p><strong>Affected Components:</strong><br><span class="t-code-badge">${component}</span></p>
+                    
+                    ${issue.link ? `<a href="${escapeHtml(issue.link)}" target="_blank" rel="noreferrer" class="t-cve-link">View full details on National Vulnerability Database ↗</a>` : ""}
+                  </div>
+                </div>
+              </div>
+            </td>
+          </tr>
+          `;
+        }).join("") || `<tr><td colspan="7" class="t-cve-empty">No CVE rows match the current filters.</td></tr>`}
+      </tbody>
+    </table>
+    ${hidden > 0 ? `<div class="cve-note">Showing the first ${visible.length} filtered rows. ${hidden} more hidden.</div>` : ""}
   </div>`;
 }
 
@@ -2593,8 +2685,65 @@ function renderPackages(packageManifest, release = {}) {
   </div>`;
 }
 
+function sbomInfo(release = {}, detail = {}) {
+  return detail.sbom || release.sbom || {};
+}
+
+function renderSbomDownload(label, path, className = "link-button") {
+  if (!path) return "";
+  return `<a class="${escapeHtml(className)}" href="data/${escapeHtml(path)}" download>${escapeHtml(label)}</a>`;
+}
+
+function renderSbom(release, detail = {}) {
+  const sbom = sbomInfo(release, detail);
+  if (!sbom.available) {
+    return renderDataNotice("warn", "SBOM not imported", "No deploy-sbom SPDX documents were found in the metadata artifact for this build.", [
+      release.sbom_manifest_path ? `Manifest: ${release.sbom_manifest_path}` : "",
+    ]);
+  }
+  const documents = Array.isArray(sbom.documents) ? sbom.documents : [];
+  const bundle = sbom.bundle || {};
+  const cyclonedx = sbom.cyclonedx || {};
+  const counts = Object.entries(sbom.counts || {})
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([kind, count]) => `${kind}: ${count}`)
+    .join(" | ");
+  return `<div class="list-block">
+    <div class="item">
+      <div class="item-head"><div class="item-title">CycloneDX image SBOM</div><span class="badge ok">${escapeHtml(cyclonedx.format || "CycloneDX JSON")}</span></div>
+      <div class="item-meta">Components: ${Number(cyclonedx.component_count || 0)} | Size: ${escapeHtml(formatBytes(cyclonedx.size_bytes || 0))}</div>
+      <div class="item-meta">Generated from the installed package manifest and linked to the source SPDX bundle.</div>
+      <div class="item-actions">${renderSbomDownload("Download CycloneDX JSON", cyclonedx.path)}</div>
+    </div>
+    <div class="item">
+      <div class="item-head"><div class="item-title">Complete SPDX bundle</div><span class="badge ok">${escapeHtml(sbom.format || "SPDX JSON")}</span></div>
+      <div class="item-meta">Profile: ${escapeHtml(sbom.profile || "OpenEmbedded SPDX")}</div>
+      <div class="item-meta">Documents: ${Number(sbom.document_count || bundle.document_count || 0)}${counts ? ` | ${escapeHtml(counts)}` : ""}</div>
+      <div class="item-meta">Bundle: ${escapeHtml(bundle.format || "SPDX JSON documents in tar.gz")} ${bundle.size_bytes ? `(${escapeHtml(formatBytes(bundle.size_bytes))})` : ""}</div>
+      <div class="item-actions">${renderSbomDownload("Download SPDX bundle", bundle.path)}</div>
+    </div>
+    <div class="item">
+      <div class="item-title">Primary SPDX documents</div>
+      <div class="item-meta">These are the image or SWUpdate recipe documents. Use the complete bundle when a tool needs all external SPDX document references.</div>
+    </div>
+    ${documents.length ? documents.map((doc) => `
+      <div class="item">
+        <div class="item-head"><div class="item-title">${escapeHtml(doc.label || doc.document_name || doc.source || "SPDX document")}</div><span class="badge unknown">${escapeHtml(doc.spdx_version || doc.format || "SPDX")}</span></div>
+        <div class="item-meta mono">${escapeHtml(doc.source || "")}</div>
+        <div class="item-meta">Packages: ${Number(doc.packages || 0)} | External refs: ${Number(doc.external_document_refs || 0)} | Relationships: ${Number(doc.relationships || 0)} | Size: ${escapeHtml(formatBytes(doc.size_bytes || 0))}</div>
+        <div class="item-actions">${renderSbomDownload("Download SPDX JSON", doc.path, "link-button subtle")}</div>
+      </div>
+    `).join("") : `<div class="empty-state"><p>No primary SBOM documents were selected. Download the complete bundle.</p></div>`}
+  </div>`;
+}
+
 function severityRank(severity) {
   return { critical: 0, high: 1, medium: 2, low: 3, none: 4, unknown: 5 }[String(severity || "unknown").toLowerCase()] ?? 5;
+}
+
+function truncateText(text, maxLen) {
+  if (!text) return "";
+  return text.length > maxLen ? text.slice(0, maxLen) + "…" : text;
 }
 
 function statusRank(status) {
@@ -2739,6 +2888,22 @@ function bindCveControls() {
       renderDetails();
     });
   });
+
+  // Accordion toggle logic for CVE Torizon table
+  el.detailsPanel.querySelectorAll("[data-cve-toggle-target]").forEach((row) => {
+    row.addEventListener("click", () => {
+      const detailsRow = row.nextElementSibling;
+      if (detailsRow && detailsRow.classList.contains("t-cve-details-row")) {
+        const isHidden = detailsRow.classList.contains("hidden");
+        detailsRow.classList.toggle("hidden");
+        // toggle caret
+        const caret = row.querySelector(".caret-icon");
+        if (caret) {
+          caret.style.transform = isHidden ? "rotate(90deg)" : "rotate(0deg)";
+        }
+      }
+    });
+  });
 }
 
 function renderCveOption(value, label, selected) {
@@ -2881,14 +3046,183 @@ function renderPackageSummary(issues) {
   </section>`;
 }
 
-function renderCves(cve, release = {}) {
-  if (!release.cve_summary_path) return renderDataNotice("warn", "Build has no CVE report path", "The dashboard index does not point to cve-summary.json for this build.");
-  if (cve.__loading) return renderLoadingNotice("Loading CVE report", "Large CVE reports can take several seconds to download and parse. This tab will render automatically when loading completes.", cve.path);
-  if (cve.error) return renderLoadError("Could not load cve-summary.json", cve);
-  const issues = Array.isArray(cve.issues) ? cve.issues : [];
-  if (!cve.available) return renderDataNotice("warn", "CVE report not imported", "No real CVE report was found in the metadata artifact for this build. Test-data reports are ignored.", [(cve.report_files || []).length ? `Report files: ${(cve.report_files || []).join(", ")}` : "No report files recorded"]);
-  if (!issues.length) return renderDataNotice("info", "CVE report is clean", "The CVE report is present and has no issues.");
+function cveConcentricDonut(issues) {
+  // Colors
+  const severityColors = {
+    critical: "#b42318", high: "#d66b08", medium: "#d6a008",
+    low: "#4f7d95", none: "#94a3b8", unknown: "#cbd5e1",
+  };
+  const typeColors = { kernel: "#2563eb", other: "#7c3aed", unknown: "#cbd5e1" };
 
+  // Inner ring: severity
+  const severityCounts = {};
+  let total = 0;
+  for (const issue of issues) {
+    const sev = normalizedSeverity(issue);
+    severityCounts[sev] = (severityCounts[sev] || 0) + 1;
+    total++;
+  }
+  const sevOrder = ["critical", "high", "medium", "low", "none", "unknown"];
+
+  // Outer ring: type (kernel layer vs other)
+  const typeCounts = {};
+  for (const issue of issues) {
+    const layer = (issue.layer || "").toLowerCase();
+    const type = layer.includes("kernel") ? "kernel" : "other";
+    typeCounts[type] = (typeCounts[type] || 0) + 1;
+  }
+  const typeOrder = ["kernel", "other"];
+
+  if (!total) return "";
+
+  const size = 200;
+  const cx = size / 2;
+  const cy = size / 2;
+  const innerR = 50;
+  const outerR = 72;
+  const strokeInner = 18;
+  const strokeOuter = 14;
+  const circumferenceInner = 2 * Math.PI * innerR;
+  const circumferenceOuter = 2 * Math.PI * outerR;
+
+  function buildCircle(segments, circum, r, sw) {
+    let offset = 0;
+    return segments.map(({ key, value, color }) => {
+      const len = (value / total) * circum;
+      const seg = { color, offset, length: len, key, value };
+      offset += len;
+      return seg;
+    }).map((seg) =>
+      `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${seg.color}" stroke-width="${sw}"
+        stroke-dasharray="${seg.length} ${circum - seg.length}"
+        stroke-dashoffset="${-seg.offset}"
+        transform="rotate(-90 ${cx} ${cy})"
+        stroke-linecap="butt"/>`
+    ).join("");
+  }
+
+  const innerData = sevOrder
+    .filter((k) => (severityCounts[k] || 0) > 0)
+    .map((k) => ({ key: k, value: severityCounts[k], color: severityColors[k] || severityColors.unknown }));
+  const outerData = typeOrder
+    .filter((k) => (typeCounts[k] || 0) > 0)
+    .map((k) => ({ key: k, value: typeCounts[k], color: typeColors[k] || typeColors.unknown }));
+
+  // Legend items combining both rings
+  const legendItems = [
+    ...innerData.map((d) => ({ label: d.key, count: d.value, color: d.color })),
+    ...outerData.map((d) => ({ label: d.key === "kernel" ? "Kernel" : "Other", count: d.value, color: d.color })),
+  ];
+
+  // Text labels around the donut
+  const labelRadius = outerR + 20;
+  function labelPositions() {
+    const items = [];
+    let cumulative = 0;
+    for (const d of innerData) {
+      const startAngle = (cumulative / total) * 360 - 90;
+      const midAngle = startAngle + ((d.value / total) * 360) / 2;
+      const rad = (midAngle * Math.PI) / 180;
+      items.push({
+        label: d.key,
+        x: cx + labelRadius * Math.cos(rad),
+        y: cy + labelRadius * Math.sin(rad),
+        color: d.color,
+      });
+      cumulative += d.value;
+    }
+    return items;
+  }
+  const labels = labelPositions();
+
+  return `<div class="cve-donut-wrapper">
+    <svg width="${size + 40}" height="${size + 40}" viewBox="0 0 ${size + 40} ${size + 40}" class="cve-donut-svg">
+      <!-- Background circles -->
+      <circle cx="${cx + 20}" cy="${cy + 20}" r="${innerR}" fill="none" stroke="#e8edf2" stroke-width="${strokeInner}"/>
+      <circle cx="${cx + 20}" cy="${cy + 20}" r="${outerR}" fill="none" stroke="#e8edf2" stroke-width="${strokeOuter}"/>
+      <!-- Inner ring segments -->
+      ${buildCircle(innerData, circumferenceInner, innerR, strokeInner)}
+      <!-- Outer ring segments -->
+      ${buildCircle(outerData, circumferenceOuter, outerR, strokeOuter)}
+      <!-- Center text -->
+      <text x="${cx + 20}" y="${cy + 16}" text-anchor="middle" fill="var(--ink)" font-size="22" font-weight="800">${total}</text>
+      <text x="${cx + 20}" y="${cy + 32}" text-anchor="middle" fill="var(--muted)" font-size="10" font-weight="650">Total</text>
+      <!-- Labels around donut -->
+      ${labels.map((l) => {
+        const textAnchor = l.x > cx + 20 ? "start" : l.x < cx + 20 ? "end" : "middle";
+        const dy = l.y > cy + 20 ? "12" : "-4";
+        return `
+          <text x="${l.x + 20}" y="${l.y + 22 + Number(dy)}" text-anchor="${textAnchor}" fill="${l.color}" font-size="10" font-weight="700" dy="${dy}">${escapeHtml(l.label)}</text>
+          <circle cx="${l.x + 20 - 8}" cy="${l.y + 20 + 2}" r="3" fill="${l.color}"/>`;
+      }).join("")}
+    </svg>
+    <div class="cve-donut-legend">
+      <div class="cve-donut-legend-group"><span class="cve-donut-legend-title">Severity</span>
+        ${innerData.map((d) =>
+          `<span class="cve-donut-legend-item"><i style="background:${d.color}"></i>${escapeHtml(d.key)} (${d.value})</span>`
+        ).join("")}
+      </div>
+      <div class="cve-donut-legend-group"><span class="cve-donut-legend-title">Type</span>
+        ${outerData.map((d) =>
+          `<span class="cve-donut-legend-item"><i style="background:${d.color}"></i>${escapeHtml(d.key === "kernel" ? "Kernel" : "Other")} (${d.value})</span>`
+        ).join("")}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderCveDonutChart(data) {
+  // Accept either issues array or severity counts object (backward compat)
+  if (Array.isArray(data)) return cveConcentricDonut(data);
+  return ""; // old-style call with counts — no longer supported
+}
+
+function renderCveOverviewHeader(issues, release, cve) {
+  const severity = countBySeverity(issues);
+  const total = issues.length;
+  const critical = Number(severity.critical || 0);
+  const high = Number(severity.high || 0);
+  const vulnerable = countAffectedPackages(issues);
+  const exploited = 0; // not available in current data
+  const unpatchedCount = countUnpatchedIssues(issues);
+
+  return `<div class="cve-overview">
+    <div class="cve-overview-head">
+      <h2>CVEs Overview</h2>
+      <div class="cve-overview-actions">
+        <button class="link-button" type="button" data-export-cve="csv" data-release-id="${escapeHtml(release.id)}">Download CVE Report (CSV)</button>
+        <button class="link-button subtle" type="button" data-export-cve="json" data-release-id="${escapeHtml(release.id)}">JSON</button>
+      </div>
+    </div>
+    <div class="cve-overview-body">
+      ${renderCveDonutChart(severity)}
+      <div class="cve-overview-counts">
+        <div class="cve-ov-count total">
+          <span class="cve-ov-label">Total</span>
+          <strong class="cve-ov-value">${total}</strong>
+        </div>
+        <div class="cve-ov-count critical">
+          <span class="cve-ov-label">Critical</span>
+          <strong class="cve-ov-value">${critical}</strong>
+        </div>
+        <div class="cve-ov-count high">
+          <span class="cve-ov-label">High</span>
+          <strong class="cve-ov-value">${high}</strong>
+        </div>
+        <div class="cve-ov-count">
+          <span class="cve-ov-label">Vulnerable</span>
+          <strong class="cve-ov-value">${unpatchedCount}</strong>
+        </div>
+        <div class="cve-ov-count warning">
+          <span class="cve-ov-label">Exploited</span>
+          <strong class="cve-ov-value">${exploited}</strong>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderCveDetails(issues, release, cve) {
   const filteredIssues = filteredCveIssues(issues);
   const severity = countBySeverity(issues);
   const status = countByStatus(issues);
@@ -2905,7 +3239,7 @@ function renderCves(cve, release = {}) {
   const visibleIssues = ordered.slice(0, 200);
   const hiddenCount = Math.max(0, ordered.length - visibleIssues.length);
 
-  return `<div class="cve-view">
+  return `<div class="cve-view" id="cveDetailSection">
     ${renderCveControls(issues)}
     <div class="cve-summary-grid">
       ${renderCveMetric("Visible rows", `${filteredIssues.length}/${issues.length}`)}
@@ -2944,6 +3278,21 @@ function renderCves(cve, release = {}) {
         </div>
       `).join("") || `<div class="empty-state"><p>No CVE rows match the current filters.</p></div>`}</div>
     </section>
+  </div>`;
+}
+
+function renderCves(cve, release = {}) {
+  if (!release.cve_summary_path) return renderDataNotice("warn", "Build has no CVE report path", "The dashboard index does not point to cve-summary.json for this build.");
+  if (cve.__loading) return renderLoadingNotice("Loading CVE report", "Large CVE reports can take several seconds to download and parse. This tab will render automatically when loading completes.", cve.path);
+  if (cve.error) return renderLoadError("Could not load cve-summary.json", cve);
+  const issues = Array.isArray(cve.issues) ? cve.issues : [];
+  if (!cve.available) return renderDataNotice("warn", "CVE report not imported", "No real CVE report was found in the metadata artifact for this build. Test-data reports are ignored.", [(cve.report_files || []).length ? `Report files: ${(cve.report_files || []).join(", ")}` : "No report files recorded"]);
+  if (!issues.length) return renderDataNotice("info", "CVE report is clean", "The CVE report is present and has no issues.");
+
+  return `<div class="cve-view">
+    ${renderCveOverviewHeader(issues, release, cve)}
+    <div class="cve-view-divider"></div>
+    ${renderCveDetails(issues, release, cve)}
   </div>`;
 }
 
@@ -3029,12 +3378,29 @@ function renderLayers(layers, release = {}) {
   </div>`;
 }
 
+function cveSourceReportFiles(cve = {}) {
+  return [
+    ...(Array.isArray(cve.text_report_files) ? cve.text_report_files : []),
+    ...(Array.isArray(cve.report_files) ? cve.report_files : []),
+  ];
+}
+
 function renderMetadata(release, detail, cve) {
   const published = detail.published_artifacts || release.published_artifacts || {};
+  const metadataBase = release.release_json ? release.release_json.replace(/release\.json$/, "") : "";
+  const sbomManifestPath = release.sbom_manifest_path || (detail.metadata?.sbom_manifest && metadataBase ? `${metadataBase}${detail.metadata.sbom_manifest}` : "");
+  const cveReports = cveSourceReportFiles(cve);
+  const visibleReports = cveReports.slice(0, 80);
+  const moreReports = Math.max(0, cveReports.length - visibleReports.length);
+  const cveReportBody = cve.__loading
+    ? "Loading cve-summary.json..."
+    : cve.error
+      ? `Could not load cve-summary.json: ${cve.error}`
+      : visibleReports.map(escapeHtml).join("<br>") || "No source report paths recorded in cve-summary.json";
   return `<div class="list-block">
     <div class="item"><div class="item-title">Published artifacts</div><div class="item-meta">Images: ${escapeHtml(published.images || "")}</div><div class="item-meta">Metadata: ${escapeHtml(published.metadata || "")}</div><div class="item-meta">Release metadata: ${escapeHtml(published.release_metadata || "")}</div><div class="item-meta">Azure build: ${escapeHtml(buildId(release, detail) || "")}</div></div>
-    <div class="item"><div class="item-title">Local files</div><div class="item-meta mono">${escapeHtml(release.release_json || "")}</div><div class="item-meta mono">${escapeHtml(release.cve_summary_path || "")}</div><div class="item-meta mono">${escapeHtml(release.build_manifest || "")}</div></div>
-    <div class="item"><div class="item-title">CVE source reports</div><div class="item-meta">${(cve.report_files || []).map(escapeHtml).join("<br>") || "No files"}</div></div>
+    <div class="item"><div class="item-title">Local files</div><div class="item-meta mono">${escapeHtml(release.release_json || "")}</div><div class="item-meta mono">${escapeHtml(release.cve_summary_path || "")}</div><div class="item-meta mono">${escapeHtml(release.build_manifest || "")}</div><div class="item-meta mono">${escapeHtml(release.package_manifest_path || "")}</div><div class="item-meta mono">${escapeHtml(sbomManifestPath || "")}</div></div>
+    <div class="item"><div class="item-title">CVE source reports</div><div class="item-meta">${cveReportBody}${moreReports ? `<br>${escapeHtml(`${moreReports} more source report paths not shown`)}` : ""}</div></div>
   </div>`;
 }
 

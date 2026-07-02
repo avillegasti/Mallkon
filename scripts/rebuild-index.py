@@ -6,8 +6,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import tarfile
 import tempfile
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -127,6 +129,276 @@ def package_manifest_from_archive(archive: tarfile.TarFile, artifact_label: str)
             for item in manifests
         ],
     }
+
+
+def strip_archive_root(path: str) -> str:
+    parts = Path(path).parts
+    if len(parts) > 1 and parts[1] == "deploy-sbom":
+        return str(Path(*parts[1:]))
+    return path
+
+
+def sbom_members(archive: tarfile.TarFile) -> list[tarfile.TarInfo]:
+    return [
+        member
+        for member in archive.getmembers()
+        if member.isfile()
+        and "/deploy-sbom/" in member.name
+        and member.name.endswith(".spdx.json")
+    ]
+
+
+def sbom_target_terms(detail: dict, manifest: dict, artifact_label: str) -> set[str]:
+    terms = set()
+    for target in detail.get("targets") or manifest.get("kas", {}).get("targets", []):
+        if not target:
+            continue
+        value = str(target).lower()
+        terms.add(value)
+        if value.startswith("swupdate-"):
+            terms.add(value.removeprefix("swupdate-"))
+    for artifact in detail.get("artifacts", []):
+        name = str(artifact.get("name", "")).lower()
+        match = re.match(r"^(swupdate-[a-z0-9._-]+?)-verdin-", name)
+        if match:
+            terms.add(match.group(1))
+            terms.add(match.group(1).removeprefix("swupdate-"))
+        match = re.match(r"^([a-z0-9._-]+?)-verdin-", name)
+        if match:
+            terms.add(match.group(1))
+    for part in re.split(r"[^a-z0-9._-]+", artifact_label.lower()):
+        if "image" in part or "swupdate" in part:
+            terms.add(part)
+    return {term for term in terms if len(term) >= 4}
+
+
+def classify_sbom_member(member: tarfile.TarInfo, machine: str, terms: set[str]) -> str:
+    del machine
+    relative = strip_archive_root(member.name)
+    parts = Path(relative).parts
+    basename = Path(relative).name.lower()
+    if len(parts) >= 4 and parts[0] == "deploy-sbom" and parts[2] == "recipes" and basename.startswith("recipe-"):
+        if any(term in basename for term in terms):
+            return "primary"
+        return "recipe"
+    if len(parts) >= 4 and parts[0] == "deploy-sbom" and parts[2] == "runtime":
+        return "runtime"
+    return "support"
+
+
+def read_spdx_metadata(archive: tarfile.TarFile, member: tarfile.TarInfo) -> dict:
+    stream = archive.extractfile(member)
+    if stream is None:
+        return {}
+    try:
+        data = json.loads(stream.read().decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    return {
+        "spdx_version": data.get("spdxVersion", ""),
+        "document_name": data.get("name", ""),
+        "document_namespace": data.get("documentNamespace", ""),
+        "external_document_refs": len(data.get("externalDocumentRefs", [])),
+        "relationships": len(data.get("relationships", [])),
+        "packages": len(data.get("packages", [])),
+    }
+
+
+def cyclonedx_license_entries(value: str) -> list[dict]:
+    license_value = str(value or "").strip()
+    if not license_value or license_value in {"NOASSERTION", "CLOSED"}:
+        return []
+    return [{"expression": license_value}]
+
+
+def cyclonedx_component_ref(pkg: dict, index: int) -> str:
+    name = safe_id(pkg.get("name", "package"))
+    version = safe_id(pkg.get("version", "unknown"))
+    recipe = safe_id(pkg.get("recipe", "unknown"))
+    return f"yocto:package:{name}:{version}:{recipe}:{index}"
+
+
+def cyclonedx_component(pkg: dict, index: int) -> dict:
+    component = {
+        "type": "library",
+        "bom-ref": cyclonedx_component_ref(pkg, index),
+        "name": pkg.get("name", ""),
+        "version": pkg.get("version", ""),
+        "properties": [
+            {"name": "yocto:recipe", "value": pkg.get("recipe", "")},
+        ],
+    }
+    licenses = cyclonedx_license_entries(pkg.get("license", ""))
+    if licenses:
+        component["licenses"] = licenses
+    return component
+
+
+def cyclonedx_bom(detail: dict, package_manifest: dict, sbom: dict, relative_dir: str) -> dict:
+    packages = sorted(
+        package_manifest.get("packages", []),
+        key=lambda item: (item.get("name", ""), item.get("version", ""), item.get("recipe", "")),
+    )
+    components = [cyclonedx_component(pkg, index) for index, pkg in enumerate(packages, start=1)]
+    artifact_label = detail.get("artifact_label") or detail.get("tag") or relative_dir
+    metadata_component = {
+        "type": "firmware",
+        "bom-ref": f"yocto:image:{safe_id(artifact_label)}",
+        "name": artifact_label,
+        "version": detail.get("tag") or artifact_label,
+        "properties": [
+            {"name": "yocto:machine", "value": detail.get("machine", "")},
+            {"name": "yocto:channel", "value": detail.get("channel", "")},
+            {"name": "yocto:kas_manifest", "value": detail.get("kas_manifest", "")},
+            {"name": "yocto:package_manifest", "value": package_manifest.get("source", "")},
+            {"name": "spdx:document_count", "value": str(sbom.get("document_count", 0))},
+        ],
+    }
+    external_references = []
+    bundle_path = sbom.get("bundle", {}).get("path", "")
+    if bundle_path:
+        external_references.append({
+            "type": "bom",
+            "url": f"data/{bundle_path}",
+            "comment": "Source SPDX 2.2 JSON document bundle",
+        })
+    return {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "serialNumber": f"urn:uuid:{uuid.uuid5(uuid.NAMESPACE_URL, relative_dir + ':cyclonedx')}",
+        "version": 1,
+        "metadata": {
+            "timestamp": detail.get("generated_at_utc") or utc_now(),
+            "tools": {
+                "components": [
+                    {
+                        "type": "application",
+                        "name": "northfi-release-dashboard",
+                        "version": "1",
+                    }
+                ]
+            },
+            "component": metadata_component,
+        },
+        "components": components,
+        "externalReferences": external_references,
+    }
+
+
+def write_cyclonedx_bom(output_dir: Path, relative_dir: str, detail: dict, package_manifest: dict, sbom: dict) -> dict:
+    target_path = output_dir / "sbom" / "cyclonedx.json"
+    bom = cyclonedx_bom(detail, package_manifest, sbom, relative_dir)
+    write_json(target_path, bom)
+    return {
+        "label": "CycloneDX JSON",
+        "path": f"{relative_dir}/sbom/cyclonedx.json",
+        "format": "CycloneDX 1.5 JSON",
+        "component_count": len(bom.get("components", [])),
+        "size_bytes": target_path.stat().st_size if target_path.exists() else 0,
+    }
+
+
+def copy_archive_member(archive: tarfile.TarFile, member: tarfile.TarInfo, output_path: Path) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    stream = archive.extractfile(member)
+    if stream is None:
+        return
+    with output_path.open("wb") as handle:
+        shutil.copyfileobj(stream, handle)
+    output_path.chmod(0o664)
+
+
+def write_sbom_bundle(
+    archive: tarfile.TarFile,
+    members: list[tarfile.TarInfo],
+    output_path: Path,
+    archive_path: Path,
+) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists() and output_path.stat().st_mtime >= archive_path.stat().st_mtime:
+        return
+    temp_path = output_path.with_suffix(output_path.suffix + ".tmp")
+    with tarfile.open(temp_path, "w:gz") as bundle:
+        for member in members:
+            stream = archive.extractfile(member)
+            if stream is None:
+                continue
+            info = tarfile.TarInfo(strip_archive_root(member.name))
+            info.size = member.size
+            info.mtime = member.mtime
+            info.mode = 0o664
+            bundle.addfile(info, stream)
+    temp_path.chmod(0o664)
+    temp_path.replace(output_path)
+
+
+def sbom_manifest_from_archive(
+    archive: tarfile.TarFile,
+    detail: dict,
+    manifest: dict,
+    package_manifest: dict,
+    artifact_label: str,
+    relative_dir: str,
+    output_dir: Path,
+    archive_path: Path,
+) -> dict:
+    members = sbom_members(archive)
+    if not members:
+        return {
+            "available": False,
+            "format": "SPDX-2.2 JSON",
+            "documents": [],
+            "document_count": 0,
+        }
+
+    machine = detail.get("machine", "")
+    terms = sbom_target_terms(detail, manifest, artifact_label)
+    classified = [(member, classify_sbom_member(member, machine, terms)) for member in members]
+    primary_members = [member for member, kind in classified if kind == "primary"]
+    if not primary_members:
+        primary_members = [member for member, kind in classified if kind == "recipe"][:5]
+
+    sbom_dir = output_dir / "sbom"
+    documents = []
+    for member in primary_members[:12]:
+        relative_source = strip_archive_root(member.name)
+        target_name = Path(relative_source).name
+        target_path = sbom_dir / target_name
+        copy_archive_member(archive, member, target_path)
+        metadata = read_spdx_metadata(archive, member)
+        documents.append({
+            "label": metadata.get("document_name") or target_name.removesuffix(".spdx.json"),
+            "type": classify_sbom_member(member, machine, terms),
+            "format": "SPDX-2.2 JSON",
+            "path": f"{relative_dir}/sbom/{target_name}",
+            "source": relative_source,
+            "size_bytes": member.size,
+            **metadata,
+        })
+
+    bundle_path = sbom_dir / "sbom-spdx.tar.gz"
+    write_sbom_bundle(archive, members, bundle_path, archive_path)
+    counts = {}
+    for _, kind in classified:
+        counts[kind] = counts.get(kind, 0) + 1
+
+    sbom = {
+        "available": True,
+        "format": "SPDX-2.2 JSON",
+        "profile": "OpenEmbedded create-spdx.bbclass",
+        "document_count": len(members),
+        "counts": counts,
+        "documents": documents,
+        "bundle": {
+            "label": "Complete SPDX JSON bundle",
+            "path": f"{relative_dir}/sbom/sbom-spdx.tar.gz",
+            "format": "SPDX-2.2 JSON documents in tar.gz",
+            "document_count": len(members),
+            "size_bytes": bundle_path.stat().st_size if bundle_path.exists() else 0,
+        },
+    }
+    sbom["cyclonedx"] = write_cyclonedx_bom(output_dir, relative_dir, detail, package_manifest, sbom)
+    return sbom
 
 
 def channel_from_manifest(manifest: dict, release: dict) -> str:
@@ -383,6 +655,7 @@ def build_detail(manifest: dict, release: dict, cve: dict, packages: dict, archi
 def index_entry(detail: dict, relative_dir: str, cve: dict | None = None) -> dict:
     cve_summary = detail.get("cve_summary", {})
     cve = cve or {}
+    sbom = detail.get("sbom", {})
     return {
         "id": safe_id(relative_dir),
         "channel": detail.get("channel", "development"),
@@ -406,6 +679,15 @@ def index_entry(detail: dict, relative_dir: str, cve: dict | None = None) -> dic
         "build_manifest": f"{relative_dir}/build-manifest.json",
         "package_manifest_path": f"{relative_dir}/package-manifest.json",
         "package_manifest": detail.get("package_manifest", {}),
+        "sbom_manifest_path": f"{relative_dir}/sbom-manifest.json",
+        "sbom": {
+            "available": bool(sbom.get("available")),
+            "format": sbom.get("format", ""),
+            "document_count": sbom.get("document_count", 0),
+            "bundle": sbom.get("bundle", {}),
+            "cyclonedx": sbom.get("cyclonedx", {}),
+            "documents": sbom.get("documents", []),
+        },
         "published_artifacts": detail.get("published_artifacts", {}),
     }
 
@@ -453,22 +735,25 @@ def rebuild() -> None:
                 release = read_json_member(archive, "release.json")
                 artifact_label = manifest.get("artifact_label") or release.get("artifact_label") or archive_path.stem
                 packages = package_manifest_from_archive(archive, artifact_label)
+                normalized_cve = normalize_cve_summary(cve)
+                detail = build_detail(manifest, release, normalized_cve, packages, archive_path)
+                channel = detail.get("channel", "development")
+                group = storage_group(channel)
+                source_id = safe_id(archive_path.parent.name)
+                relative_dir = f"{group}/{source_id}"
+                output_dir = DASHBOARD_DATA_DIR / relative_dir
+                sbom = sbom_manifest_from_archive(archive, detail, manifest, packages, artifact_label, relative_dir, output_dir, archive_path)
+                detail["metadata"]["sbom_manifest"] = "sbom-manifest.json"
+                detail["sbom"] = sbom
         except (OSError, tarfile.TarError, json.JSONDecodeError, KeyError) as exc:
             print(f"Skipping {archive_path}: {exc}")
             continue
-
-        normalized_cve = normalize_cve_summary(cve)
-        detail = build_detail(manifest, release, normalized_cve, packages, archive_path)
-        channel = detail.get("channel", "development")
-        group = storage_group(channel)
-        source_id = safe_id(archive_path.parent.name)
-        relative_dir = f"{group}/{source_id}"
-        output_dir = DASHBOARD_DATA_DIR / relative_dir
 
         write_json(output_dir / "release.json", detail)
         write_json(output_dir / "build-manifest.json", manifest)
         write_json(output_dir / "package-manifest.json", packages)
         write_json(output_dir / "cve-summary.json", normalized_cve)
+        write_json(output_dir / "sbom-manifest.json", detail["sbom"])
         entry = index_entry(detail, relative_dir, normalized_cve)
         entries.append(entry)
         grouped_entries[group].append(entry)
