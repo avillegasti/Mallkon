@@ -4726,7 +4726,25 @@ async function initializeProjects() {
 
   // Populate sidebar projects list
   if (el.sidebarProjectsList) {
-    if (state.projects.length === 0) {
+    const hasProjects = state.projects.length > 0;
+
+    // Toggle disabled class on project-dependent sidebar nav components
+    if (el.sidebarDashboardLink) el.sidebarDashboardLink.classList.toggle("disabled", !hasProjects);
+    if (el.sidebarHardwareGroup) {
+      el.sidebarHardwareGroup.classList.toggle("disabled", !hasProjects);
+      if (!hasProjects) el.sidebarHardwareGroup.open = false;
+    }
+    if (el.sidebarSoftwareGroup) {
+      el.sidebarSoftwareGroup.classList.toggle("disabled", !hasProjects);
+      if (!hasProjects) el.sidebarSoftwareGroup.open = false;
+    }
+
+    // Force redirection to projectsView if current active view requires a project but none exist
+    if (!hasProjects && ["overview", "releases", "development", "attention", "compare", "lineage"].includes(state.activeView)) {
+      setActiveView("projects");
+    }
+
+    if (!hasProjects) {
       let html = '<div style="padding: 6px 12px; color: #768390; font-size: 13px;">No projects</div>';
       html += `
         <a href="#" class="nav-sub-link manage-projects-sidebar-btn" style="border-top: 1px solid rgba(255,255,255,0.05); margin-top: 4px; padding-top: 6px; color: #539bf5; font-weight: 500; display: block; text-decoration: none; padding: 6px 12px;">Manage Projects</a>
