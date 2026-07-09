@@ -230,6 +230,18 @@ def verify_project_access(required_roles: list[str] = None):
         if "admin" in user_roles:
             return project_id
 
+        # Fallback for the default project to allow access based on global roles
+        if project_id == "default":
+            user_project_role = "viewer"
+            if "admin" in user_roles:
+                user_project_role = "admin"
+            elif "approver" in user_roles:
+                user_project_role = "approver"
+            
+            if required_roles and user_project_role not in required_roles:
+                raise HTTPException(status_code=403, detail="Insufficient permission in this project")
+            return project_id
+
         with db() as conn:
             row = conn.execute(
                 "SELECT role FROM user_projects WHERE user_sub = ? AND project_id = ?",
@@ -683,9 +695,9 @@ def list_projects(current_user: dict[str, Any] = Depends(get_current_user)) -> d
         else:
             rows = conn.execute(
                 """
-                SELECT p.* FROM projects p
-                JOIN user_projects up ON p.id = up.project_id
-                WHERE up.user_sub = ?
+                SELECT DISTINCT p.* FROM projects p
+                LEFT JOIN user_projects up ON p.id = up.project_id
+                WHERE up.user_sub = ? OR p.id = 'default'
                 ORDER BY p.name ASC
                 """,
                 (user_sub,),
