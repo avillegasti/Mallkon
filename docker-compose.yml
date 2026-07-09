@@ -1,4 +1,15 @@
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: northfi-release-db
+    environment:
+      POSTGRES_DB: release_portal
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: release_password_secure
+    volumes:
+      - ./state/postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
   portal-api:
     build:
       context: .
@@ -7,8 +18,9 @@ services:
     container_name: northfi-release-portal-api
     depends_on:
       - keycloak
+      - db
     environment:
-      PORTAL_DB_PATH: /data/portal.db
+      DATABASE_URL: postgresql://postgres:release_password_secure@db:5432/release_portal
       KEYCLOAK_ISSUER: http://keycloak:8080/realms/northfi
       KEYCLOAK_AUDIENCE: release-dashboard
       ARTIFACT_ROOT: /artifacts
