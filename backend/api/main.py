@@ -250,7 +250,7 @@ def clean_status(status: str) -> str:
     return status if status in VALID_STATUSES else "Draft"
 
 
-def row_to_decision(row: sqlite3.Row | None, release_key: str, metadata: dict[str, str] | None = None) -> dict[str, Any]:
+def row_to_decision(row: Any, release_key: str, metadata: dict[str, str] | None = None) -> dict[str, Any]:
     meta = metadata or {}
     if not row:
         return {
@@ -289,7 +289,7 @@ def row_to_decision(row: sqlite3.Row | None, release_key: str, metadata: dict[st
     }
 
 
-def checklist_response(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+def checklist_response(rows: list[Any]) -> list[dict[str, Any]]:
     by_key = {row["item_key"]: row for row in rows}
     response = []
     for key, label, help_text in CHECKLIST:
@@ -306,7 +306,7 @@ def checklist_response(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
     return response
 
 
-def get_review_payload(conn: sqlite3.Connection, release_key: str, metadata: dict[str, str] | None = None) -> dict[str, Any]:
+def get_review_payload(conn: DbConnectionWrapper, release_key: str, metadata: dict[str, str] | None = None) -> dict[str, Any]:
     decision_row = conn.execute("SELECT * FROM release_decisions WHERE release_key = ?", (release_key,)).fetchone()
     item_rows = conn.execute("SELECT * FROM release_checklist_items WHERE release_key = ?", (release_key,)).fetchall()
     decision = row_to_decision(decision_row, release_key, metadata)
