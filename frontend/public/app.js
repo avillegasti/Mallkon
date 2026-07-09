@@ -4718,28 +4718,35 @@ async function initializeProjects() {
     state.projects = Array.isArray(data.projects) ? data.projects : [];
   } catch (err) {
     console.error("Could not load projects", err);
-    state.projects = [{ id: "default", name: "Default Project" }];
+    state.projects = [];
   }
 
   // Populate selector dropdown
   if (el.projectSelector) {
-    el.projectSelector.innerHTML = state.projects.map(
-      (proj) => `<option value="${escapeHtml(proj.id)}">${escapeHtml(proj.name)}</option>`
-    ).join("");
-
-    // Select active project
-    if (state.projects.some(p => p.id === state.activeProjectId)) {
-      el.projectSelector.value = state.activeProjectId;
-    } else if (state.projects.length > 0) {
-      state.activeProjectId = state.projects[0].id;
-      window.localStorage.setItem("activeProjectId", state.activeProjectId);
-      el.projectSelector.value = state.activeProjectId;
+    if (state.projects.length === 0) {
+      el.projectSelector.innerHTML = '<option value="">No projects</option>';
+      state.activeProjectId = "";
+      window.localStorage.removeItem("activeProjectId");
+      el.projectSelector.value = "";
     } else {
-      state.activeProjectId = "default";
-      el.projectSelector.value = "default";
+      el.projectSelector.innerHTML = state.projects.map(
+        (proj) => `<option value="${escapeHtml(proj.id)}">${escapeHtml(proj.name)}</option>`
+      ).join("");
+
+      // Select active project
+      if (state.projects.some(p => p.id === state.activeProjectId)) {
+        el.projectSelector.value = state.activeProjectId;
+      } else {
+        state.activeProjectId = state.projects[0].id;
+        window.localStorage.setItem("activeProjectId", state.activeProjectId);
+        el.projectSelector.value = state.activeProjectId;
+      }
     }
 
     // Listen to changes
+    const newSelector = el.projectSelector.cloneNode(true);
+    el.projectSelector.parentNode.replaceChild(newSelector, el.projectSelector);
+    el.projectSelector = newSelector;
     el.projectSelector.addEventListener("change", (e) => {
       state.activeProjectId = e.target.value;
       window.localStorage.setItem("activeProjectId", state.activeProjectId);

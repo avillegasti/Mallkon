@@ -173,15 +173,8 @@ def init_db() -> None:
                     """
                 )
                 
-                # Auto-create the default project if it doesn't exist
-                conn.execute(
-                    """
-                    INSERT INTO projects (id, name, description, artifact_path, created_at, created_by)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT(id) DO NOTHING
-                    """,
-                    ("default", "Default Project", "Auto-generated default project", "/artifacts", utcnow(), "system")
-                )
+                # Ensure there is no auto-generated 'default' project
+                conn.execute("DELETE FROM projects WHERE id = 'default'")
             break
         except psycopg2.OperationalError as exc:
             print(f"Database connection failed, retrying... ({retries} left). Error: {exc}", flush=True)
