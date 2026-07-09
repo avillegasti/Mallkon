@@ -774,7 +774,8 @@ function summarizeIndexFailures(results, paths) {
 }
 
 async function loadDashboardIndexes() {
-  const paths = ["data/releases/index.json", "data/development/index.json"];
+  const prefix = state.activeProjectId === "default" ? "data" : `data/projects/${state.activeProjectId}`;
+  const paths = [`${prefix}/releases/index.json`, `${prefix}/development/index.json`];
   const settled = await Promise.allSettled(paths.map((path) => fetchJson(path)));
   const indexes = settled
     .filter((result) => result.status === "fulfilled")
@@ -782,16 +783,16 @@ async function loadDashboardIndexes() {
 
   if (!indexes.length) {
     try {
-      const legacy = await fetchJson("data/releases-index.json");
+      const legacy = await fetchJson(`${prefix}/releases-index.json`);
       return {
         generated_at_utc: legacy.generated_at_utc,
         releases: Array.isArray(legacy.releases) ? legacy.releases : [],
       };
     } catch (legacyError) {
-      const normalized = normalizeLoadError(legacyError, "data/releases-index.json");
+      const normalized = normalizeLoadError(legacyError, `${prefix}/releases-index.json`);
       throw {
         kind: normalized.kind === "missing" ? "missing-index" : normalized.kind,
-        path: "data/releases/index.json, data/development/index.json, data/releases-index.json",
+        path: `${prefix}/releases/index.json, ${prefix}/development/index.json, ${prefix}/releases-index.json`,
         message: normalized.message,
         detail: summarizeIndexFailures(settled, paths),
         status: normalized.status,
@@ -1920,6 +1921,7 @@ function reviewApiPath(release) {
 
 function reviewQuery(release) {
   const params = new URLSearchParams({
+    project_id: state.activeProjectId,
     tag: release?.tag || "",
     build: release?.artifact_label || release?.id || "",
     machine: release?.machine || "",
@@ -2108,7 +2110,7 @@ async function loadReleaseAudit(release, options = {}) {
   if (!isReleaseTag(release)) return null;
   if (!state.reviewAudits.has(release.id)) state.reviewAudits.set(release.id, { __loading: true, events: [] });
   try {
-    const data = await fetchJson(`${reviewApiPath(release)}/audit`);
+    const data = await fetchJson(`${reviewApiPath(release)}/audit?project_id=${encodeURIComponent(state.activeProjectId)}`);
     const audit = { events: Array.isArray(data.events) ? data.events : [] };
     state.reviewAudits.set(release.id, audit);
     if (options.render !== false) renderDetails();
@@ -2200,7 +2202,7 @@ async function saveReleaseReview(release, review) {
     checks: { ...emptyReview().checks, ...(review.checks || {}) },
   };
   try {
-    const data = await fetchJson(reviewApiPath(release), {
+    const data = await fetchJson(`${reviewApiPath(release)}?project_id=${encodeURIComponent(state.activeProjectId)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -4579,5 +4581,41 @@ el.compareSwap.addEventListener("click", () => {
   el.compareTarget.value = state.compareTargetId || "";
   renderCompare();
 });
+async function initializeProjects() {
+  try {
+    const data = await fetchJson("/api/projects");
+    state.projects = Array.isArray(data.projects) ? data.projects : [];
+  } catch (err) {
+    console.error("Could not load projects", err);
+    state.projects = [{ id: "default", name: "Default Project" }];
+  }
+
+  // Populate selector dropdown
+  if (el.projectSelector) {
+    el.projectSelector.innerHTML = state.projects.map(
+      (proj) => `<option value="${escapeHtml(proj.id)}">${escapeHtml(proj.name)}</option>`
+    ).join("");
+
+    // Select active project
+    if (state.projects.some(p => p.id === state.activeProjectId)) {
+      el.projectSelector.value = state.activeProjectId;
+    } else if (state.projects.length > 0) {
+      state.activeProjectId = state.projects[0].id;
+      window.localStorage.setItem("activeProjectId", state.activeProjectId);
+      el.projectSelector.value = state.activeProjectId;
+    } else {
+      state.activeProjectId = "default";
+      el.projectSelector.value = "default";
+    }
+
+    // Listen to changes
+    el.projectSelector.addEventListener("change", (e) => {
+      state.activeProjectId = e.target.value;
+      window.localStorage.setItem("activeProjectId", state.activeProjectId);
+      loadIndex();
+    });
+  }
+}
+
 syncViewTabs();
-initializeAuth().finally(loadIndex);
+initializeAuth().then(initializeProjects).finally(loadIndex);

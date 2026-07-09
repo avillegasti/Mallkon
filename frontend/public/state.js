@@ -25,6 +25,8 @@ export const state = {
   packageQuery: "",
   sortKey: "date",
   sortDirection: "desc",
+  activeProjectId: window.localStorage.getItem("activeProjectId") || "default",
+  projects: [],
 };
 
 export const el = {
@@ -87,4 +89,5 @@ export const el = {
   infoJiraToken: document.getElementById("infoJiraToken"),
   saveJiraTokenBtn: document.getElementById("saveJiraTokenBtn"),
   jiraTokenStatus: document.getElementById("jiraTokenStatus"),
+  projectSelector: document.getElementById("projectSelector"),
 };
