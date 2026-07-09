@@ -859,6 +859,12 @@ body.torizon-theme {
   background-color: #00508f;
 }
 
+.nav-link.disabled, .nav-group.disabled {
+  pointer-events: none !important;
+  opacity: 0.35 !important;
+  cursor: not-allowed !important;
+}
+
 /* Collapsible Nav Groups */
 .nav-group {
   display: block;

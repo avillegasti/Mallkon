@@ -28,23 +28,9 @@
         <span style="color: #539bf5; margin-left: 4px; font-weight: 400;">Cloud</span>
       </div>
     </div>
-
-    <!-- Project Selector Sidebar Section -->
-    <div class="project-selector-sidebar" style="padding: 16px 20px; border-bottom: 1px solid rgba(255,255,255,0.08); background: #121212; display: flex; flex-direction: column; gap: 6px;">
-      <span style="color: #768390; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;">Active Project</span>
-      <div style="display: flex; align-items: center; gap: 8px;">
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#539bf5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
-        </svg>
-        <select id="projectSelector" style="background: #2d333b; border: 1px solid #444c56; color: #adbac7; border-radius: 6px; padding: 6px 10px; font-size: 13px; font-weight: 500; outline: none; cursor: pointer; width: 100%; font-family: 'Inter', sans-serif;">
-          <option value="default">Loading...</option>
-        </select>
-      </div>
-    </div>
-
     <div class="sidebar-nav">
       <!-- Dashboard Link -->
-      <a href="#" class="nav-link view-tab active" data-view="overview">
+      <a href="#" id="sidebarDashboardLink" class="nav-link view-tab active" data-view="overview">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nav-icon">
           <rect x="3" y="3" width="7" height="9"></rect>
@@ -55,8 +41,29 @@
         <span>Dashboard</span>
       </a>
 
+      <!-- Projects Section -->
+      <details open class="nav-group" id="sidebarProjectsGroup">
+        <summary class="nav-group-header">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nav-icon">
+              <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path>
+            </svg>
+            <span>Projects</span>
+          </div>
+          <svg class="chevron-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+            fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </summary>
+        <div class="nav-group-items" id="sidebarProjectsList">
+          <!-- Dynamically populated project links -->
+          <div style="padding: 6px 12px; color: #768390; font-size: 13px;">Loading...</div>
+        </div>
+      </details>
+
       <!-- Hardware Section -->
-      <details class="nav-group">
+      <details id="sidebarHardwareGroup" class="nav-group">
         <summary class="nav-group-header">
           <div style="display: flex; align-items: center; gap: 10px;">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
@@ -81,7 +88,7 @@
       </details>
 
       <!-- Software Section -->
-      <details open class="nav-group">
+      <details id="sidebarSoftwareGroup" open class="nav-group">
         <summary class="nav-group-header">
           <div style="display: flex; align-items: center; gap: 10px;">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
@@ -558,6 +565,20 @@
                 </div>
               </div>
               
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <!-- Projects View Section -->
+      <div id="projectsView" class="view-panel hidden" role="tabpanel">
+        <section class="torizon-card" aria-label="Projects Management">
+          <div class="card-header">
+            <h2>Projects Management</h2>
+            <span style="font-size: 12px; color: #768390;">Configure projects, member access, and create new projects</span>
+          </div>
+          <div class="card-body">
+            <div style="display: flex; flex-direction: column; gap: 24px;">
               <!-- Project Settings Section -->
               <div id="projectSettingsSection" style="display: none;">
                 <h3 style="font-size: 14px; color: #adbac7; font-weight: 600; margin-bottom: 12px; border-bottom: 1px solid #444c56; padding-bottom: 6px;">Project Configuration</h3>

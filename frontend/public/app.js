@@ -684,6 +684,8 @@ function syncViewTabs() {
   el.lineageView?.classList.toggle("hidden", state.activeView !== "lineage");
   el.informationView?.classList.toggle("hidden", state.activeView !== "information");
   el.informationView?.classList.toggle("active", state.activeView === "information");
+  el.projectsView?.classList.toggle("hidden", state.activeView !== "projects");
+  el.projectsView?.classList.toggle("active", state.activeView === "projects");
   if (el.channelTabsContainer) el.channelTabsContainer.style.display = "none";
   if (el.channelFilterContainer) el.channelFilterContainer.style.display = "none";
 }
@@ -698,11 +700,12 @@ function setActiveView(view) {
       setActiveChannel("release");
     }
   } else {
-    state.activeView = ["overview", "releases", "attention", "compare", "lineage", "information"].includes(view) ? view : "overview";
+    state.activeView = ["overview", "releases", "attention", "compare", "lineage", "information", "projects"].includes(view) ? view : "overview";
   }
   syncViewTabs();
   if (state.activeView === "attention") renderAttention();
   if (state.activeView === "compare") renderCompare();
+  if (state.activeView === "projects") renderProjectSettings();
   if (state.activeView === "lineage") renderLineage();
 }
 
@@ -4721,36 +4724,64 @@ async function initializeProjects() {
     state.projects = [];
   }
 
-  // Populate selector dropdown
-  if (el.projectSelector) {
+  // Populate sidebar projects list
+  if (el.sidebarProjectsList) {
     if (state.projects.length === 0) {
-      el.projectSelector.innerHTML = '<option value="">No projects</option>';
+      let html = '<div style="padding: 6px 12px; color: #768390; font-size: 13px;">No projects</div>';
+      html += `
+        <a href="#" class="nav-sub-link manage-projects-sidebar-btn" style="border-top: 1px solid rgba(255,255,255,0.05); margin-top: 4px; padding-top: 6px; color: #539bf5; font-weight: 500; display: block; text-decoration: none; padding: 6px 12px;">Manage Projects</a>
+      `;
+      el.sidebarProjectsList.innerHTML = html;
       state.activeProjectId = "";
       window.localStorage.removeItem("activeProjectId");
-      el.projectSelector.value = "";
     } else {
-      el.projectSelector.innerHTML = state.projects.map(
-        (proj) => `<option value="${escapeHtml(proj.id)}">${escapeHtml(proj.name)}</option>`
-      ).join("");
-
-      // Select active project
-      if (state.projects.some(p => p.id === state.activeProjectId)) {
-        el.projectSelector.value = state.activeProjectId;
-      } else {
+      // Determine active project
+      if (!state.projects.some(p => p.id === state.activeProjectId)) {
         state.activeProjectId = state.projects[0].id;
         window.localStorage.setItem("activeProjectId", state.activeProjectId);
-        el.projectSelector.value = state.activeProjectId;
       }
+
+      let html = state.projects.map((proj) => {
+        const isActive = proj.id === state.activeProjectId;
+        return `
+          <a href="#" class="nav-sub-link project-link${isActive ? ' active' : ''}" data-project-id="${escapeHtml(proj.id)}" style="display: block; text-decoration: none; padding: 6px 12px; border-radius: 4px; color: ${isActive ? '#fff' : '#adbac7'}; background-color: ${isActive ? '#2d333b' : 'transparent'}; margin-bottom: 2px;">
+            ${escapeHtml(proj.name)}
+          </a>
+        `;
+      }).join("");
+
+      html += `
+        <a href="#" class="nav-sub-link manage-projects-sidebar-btn" style="border-top: 1px solid rgba(255,255,255,0.05); margin-top: 6px; padding-top: 6px; color: #539bf5; font-weight: 500; display: block; text-decoration: none; padding: 6px 12px;">Manage Projects</a>
+      `;
+      el.sidebarProjectsList.innerHTML = html;
     }
 
-    // Listen to changes
-    const newSelector = el.projectSelector.cloneNode(true);
-    el.projectSelector.parentNode.replaceChild(newSelector, el.projectSelector);
-    el.projectSelector = newSelector;
-    el.projectSelector.addEventListener("change", (e) => {
-      state.activeProjectId = e.target.value;
-      window.localStorage.setItem("activeProjectId", state.activeProjectId);
-      loadIndex();
+    // Bind project links
+    el.sidebarProjectsList.querySelectorAll(".project-link").forEach((link) => {
+      link.addEventListener("click", (e) => {
+        e.preventDefault();
+        const projId = link.dataset.projectId;
+        state.activeProjectId = projId;
+        window.localStorage.setItem("activeProjectId", state.activeProjectId);
+        
+        // Update active class immediately in UI
+        el.sidebarProjectsList.querySelectorAll(".project-link").forEach(l => {
+          const isActive = l.dataset.projectId === projId;
+          l.classList.toggle("active", isActive);
+          l.style.color = isActive ? '#fff' : '#adbac7';
+          l.style.backgroundColor = isActive ? '#2d333b' : 'transparent';
+        });
+
+        loadIndex();
+      });
+    });
+
+    // Bind manage projects button
+    el.sidebarProjectsList.querySelectorAll(".manage-projects-sidebar-btn").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        setActiveView("projects");
+      });
     });
   }
 }
