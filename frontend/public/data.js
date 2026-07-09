@@ -130,8 +130,11 @@ export async function fetchJson(path, options = {}) {
   try {
     response = await fetch(`${path}${separator}ts=${Date.now()}`, {
       cache: "no-store",
-      headers,
       ...options,
+      headers: {
+        ...headers,
+        ...(options.headers || {})
+      }
     });
   } catch (error) {
     throw { kind: "network", path, message: `Request failed for ${path}: ${error.message || error}` };

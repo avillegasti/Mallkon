@@ -241,96 +241,125 @@ async function loadUserProfile() {
   renderProjectSettings();
 }
 
+function renderProjectsListTable() {
+  if (!el.projectsTableBody) return;
+  const roles = currentUserRoles();
+  const isAdmin = roles.includes("admin");
+
+  if (state.projects.length === 0) {
+    el.projectsTableBody.innerHTML = `
+      <tr>
+        <td colspan="4" style="padding: 12px 0; text-align: center; color: #768390;">No projects registered in the system.</td>
+      </tr>
+    `;
+    return;
+  }
+
+  el.projectsTableBody.innerHTML = state.projects.map(proj => {
+    const isActive = proj.id === state.activeProjectId;
+    return `
+      <tr style="border-bottom: 1px solid #444c56; color: #adbac7; background-color: ${isActive ? 'rgba(83, 155, 245, 0.05)' : 'transparent'};">
+        <td style="padding: 10px 0; font-weight: 600; color: ${isActive ? '#fff' : '#adbac7'}">${escapeHtml(proj.id)} ${isActive ? '<span style="font-size: 10px; padding: 2px 6px; border-radius: 4px; background-color: #2e4428; color: #57ab5a; margin-left: 6px;">Active</span>' : ''}</td>
+        <td style="padding: 10px 0;">${escapeHtml(proj.name)}</td>
+        <td style="padding: 10px 0; font-family: monospace; color: #768390;">${escapeHtml(proj.artifact_path)}</td>
+        <td style="padding: 10px 0; text-align: right;">
+          <div style="display: inline-flex; gap: 8px;">
+            <button class="btn select-proj-btn" data-id="${escapeHtml(proj.id)}" style="background-color: #2d333b; color: #539bf5; border: 1px solid #444c56; padding: 4px 10px; border-radius: 6px; font-size: 11px; cursor: pointer; font-weight: 500;">Select</button>
+            <button class="btn config-proj-btn" data-id="${escapeHtml(proj.id)}" style="background-color: #2d333b; color: #adbac7; border: 1px solid #444c56; padding: 4px 10px; border-radius: 6px; font-size: 11px; cursor: pointer;">Configure</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join("");
+
+  // Bind Select buttons
+  el.projectsTableBody.querySelectorAll(".select-proj-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const projId = btn.dataset.id;
+      state.activeProjectId = projId;
+      window.localStorage.setItem("activeProjectId", projId);
+      
+      // Update sidebar projects active state
+      if (el.sidebarProjectsList) {
+        el.sidebarProjectsList.querySelectorAll(".project-link").forEach(l => {
+          const isActive = l.dataset.projectId === projId;
+          l.classList.toggle("active", isActive);
+          l.style.color = isActive ? '#fff' : '#adbac7';
+          l.style.backgroundColor = isActive ? '#2d333b' : 'transparent';
+        });
+      }
+      
+      loadIndex();
+      setActiveView("overview");
+    });
+  });
+
+  // Bind Configure buttons
+  el.projectsTableBody.querySelectorAll(".config-proj-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const projId = btn.dataset.id;
+      state.activeProjectId = projId;
+      window.localStorage.setItem("activeProjectId", projId);
+
+      // Update sidebar projects active state
+      if (el.sidebarProjectsList) {
+        el.sidebarProjectsList.querySelectorAll(".project-link").forEach(l => {
+          const isActive = l.dataset.projectId === projId;
+          l.classList.toggle("active", isActive);
+          l.style.color = isActive ? '#fff' : '#adbac7';
+          l.style.backgroundColor = isActive ? '#2d333b' : 'transparent';
+        });
+      }
+
+      state.activeProjectTab = "config";
+      renderProjectSettings();
+    });
+  });
+}
+
+function switchProjectTab(tab) {
+  state.activeProjectTab = tab;
+
+  // Update tabs styles
+  document.querySelectorAll(".project-sub-tab").forEach(btn => {
+    const active = btn.dataset.tab === tab;
+    btn.classList.toggle("active", active);
+    btn.style.color = active ? "#fff" : "#768390";
+    btn.style.fontWeight = active ? "600" : "500";
+    btn.style.backgroundColor = active ? "#2d333b" : "transparent";
+  });
+
+  // Toggle section visibility
+  if (el.projectsListSection) el.projectsListSection.style.display = tab === "list" ? "block" : "none";
+  if (el.projectSettingsSection) el.projectSettingsSection.style.display = tab === "config" ? "block" : "none";
+  if (el.globalAdminSection) el.globalAdminSection.style.display = tab === "create" ? "block" : "none";
+}
+
 async function renderProjectSettings() {
   const roles = currentUserRoles();
   const isAdmin = roles.includes("admin");
   
-  if (isAdmin) {
-    if (el.globalAdminSection) el.globalAdminSection.style.display = "block";
-  } else {
-    if (el.globalAdminSection) el.globalAdminSection.style.display = "none";
+  // Show/hide Create Project sub-tab based on global admin role
+  if (el.subTabCreateProject) {
+    el.subTabCreateProject.style.display = isAdmin ? "block" : "none";
   }
 
-  const activeProj = state.projects.find(p => p.id === state.activeProjectId);
-  if (!activeProj) {
-    if (el.projectSettingsSection) el.projectSettingsSection.style.display = "none";
-    return;
-  }
+  // Update visible tab view
+  switchProjectTab(state.activeProjectTab);
 
-  // Check project membership role
-  let userProjectRole = null;
-  let members = [];
-  try {
-    const membersData = await fetchJson(`/api/projects/${encodeURIComponent(state.activeProjectId)}/members`);
-    members = Array.isArray(membersData.members) ? membersData.members : [];
-    const self = members.find(m => m.user_sub === currentUserSub());
-    userProjectRole = self ? self.role : null;
-  } catch (err) {
-    console.error("Could not fetch project members", err);
-  }
-
-  const isProjectAdmin = isAdmin || userProjectRole === "admin";
-  if (isProjectAdmin || userProjectRole === "approver" || userProjectRole === "viewer") {
-    if (el.projectSettingsSection) el.projectSettingsSection.style.display = "block";
-    if (el.projectConfigId) el.projectConfigId.textContent = activeProj.id;
-    if (el.projectConfigName) el.projectConfigName.textContent = activeProj.name;
-    if (el.projectConfigArtifactPath) el.projectConfigArtifactPath.textContent = activeProj.artifact_path;
-
-    // Render members
-    if (el.projectMembersTableBody) {
-      el.projectMembersTableBody.innerHTML = members.map(member => `
-        <tr style="border-bottom: 1px solid #444c56; color: #adbac7;">
-          <td style="padding: 8px 0;">${escapeHtml(member.user_sub)}</td>
-          <td style="padding: 8px 0;"><span class="badge info" style="font-size: 11px; padding: 2px 8px; border-radius: 4px; background-color: #ddf4ff; color: #0969da; font-weight: 600; text-transform: uppercase;">${escapeHtml(member.role)}</span></td>
-          <td style="padding: 8px 0; text-align: right;">
-            ${isProjectAdmin ? `<button class="btn delete-member-btn" data-sub="${escapeHtml(member.user_sub)}" style="background-color: #cf222e; color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 11px; cursor: pointer;">Remove</button>` : "-"}
-          </td>
-        </tr>
-      `).join("");
-
-      // Bind delete events
-      el.projectMembersTableBody.querySelectorAll(".delete-member-btn").forEach(btn => {
-        btn.addEventListener("click", async () => {
-          const sub = btn.dataset.sub;
-          if (confirm(`Are you sure you want to remove member ${sub}?`)) {
-            try {
-              await fetchJson(`/api/projects/${encodeURIComponent(state.activeProjectId)}/members/${encodeURIComponent(sub)}`, { method: "DELETE" });
-              renderProjectSettings();
-            } catch (err) {
-              alert(`Error removing member: ${err.message || err}`);
-            }
-          }
-        });
+  // Bind sub-tabs click handlers once
+  document.querySelectorAll(".project-sub-tab").forEach(btn => {
+    if (!btn.dataset.bound) {
+      btn.dataset.bound = "true";
+      btn.addEventListener("click", (e) => {
+        e.preventDefault();
+        state.activeProjectTab = btn.dataset.tab;
+        renderProjectSettings();
       });
     }
-  } else {
-    if (el.projectSettingsSection) el.projectSettingsSection.style.display = "none";
-  }
+  });
 
-  // Bind Add Member button once
-  if (el.addMemberBtn) {
-    const newBtn = el.addMemberBtn.cloneNode(true);
-    el.addMemberBtn.parentNode.replaceChild(newBtn, el.addMemberBtn);
-    el.addMemberBtn = newBtn;
-    el.addMemberBtn.addEventListener("click", async () => {
-      const sub = el.newMemberSub.value.trim();
-      const role = el.newMemberRole.value;
-      if (!sub) return alert("Please enter User Sub ID");
-      try {
-        await fetchJson(`/api/projects/${encodeURIComponent(state.activeProjectId)}/members`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ user_sub: sub, role })
-        });
-        el.newMemberSub.value = "";
-        renderProjectSettings();
-      } catch (err) {
-        alert(`Error adding member: ${err.message || err}`);
-      }
-    });
-  }
-
-  // Bind Create Project button once
+  // Always bind Create Project button event listener
   if (el.createProjectBtn) {
     const newBtn = el.createProjectBtn.cloneNode(true);
     el.createProjectBtn.parentNode.replaceChild(newBtn, el.createProjectBtn);
@@ -340,6 +369,14 @@ async function renderProjectSettings() {
       const name = el.newProjectName.value.trim();
       const path = el.newProjectArtifactPath.value.trim();
       if (!id || !name || !path) return alert("All fields are required");
+
+      const idPattern = /^[a-z0-9\-]+$/;
+      if (!idPattern.test(id)) {
+        el.createProjectStatus.textContent = "Error: Project ID must be lowercase, alphanumeric, and hyphens only (e.g. project-a)";
+        el.createProjectStatus.style.color = "#cf222e";
+        return;
+      }
+
       el.createProjectStatus.textContent = "Creating...";
       el.createProjectStatus.style.color = "#adbac7";
       try {
@@ -354,12 +391,131 @@ async function renderProjectSettings() {
         el.newProjectName.value = "";
         el.newProjectArtifactPath.value = "";
         await initializeProjects();
+        state.activeProjectTab = "list";
         renderProjectSettings();
       } catch (err) {
         el.createProjectStatus.textContent = `Error: ${err.message || err}`;
         el.createProjectStatus.style.color = "#cf222e";
       }
     });
+  }
+
+  // Populate list if active tab is "list"
+  if (state.activeProjectTab === "list") {
+    renderProjectsListTable();
+  }
+
+  // Populate settings details if active tab is "config"
+  if (state.activeProjectTab === "config") {
+    const activeProj = state.projects.find(p => p.id === state.activeProjectId);
+    if (!activeProj) {
+      if (el.projectSettingsSection) {
+        el.projectSettingsSection.innerHTML = `
+          <h3 style="font-size: 14px; color: #adbac7; font-weight: 600; margin-bottom: 12px; border-bottom: 1px solid #444c56; padding-bottom: 6px;">Project Configuration</h3>
+          <p style="font-size: 13px; color: #768390;">No active project selected. Go to <a href="#" class="go-to-list-link" style="color: #539bf5; text-decoration: none;">All Projects</a> to select one.</p>
+        `;
+        const link = el.projectSettingsSection.querySelector(".go-to-list-link");
+        if (link) {
+          link.addEventListener("click", (e) => {
+            e.preventDefault();
+            state.activeProjectTab = "list";
+            renderProjectSettings();
+          });
+        }
+      }
+      return;
+    }
+
+    // Check project membership role
+    let userProjectRole = null;
+    let members = [];
+    try {
+      const membersData = await fetchJson(`/api/projects/${encodeURIComponent(state.activeProjectId)}/members`);
+      members = Array.isArray(membersData.members) ? membersData.members : [];
+      const self = members.find(m => m.user_sub === currentUserSub());
+      userProjectRole = self ? self.role : null;
+    } catch (err) {
+      console.error("Could not fetch project members", err);
+    }
+
+    const isProjectAdmin = isAdmin || userProjectRole === "admin";
+    if (isProjectAdmin || userProjectRole === "approver" || userProjectRole === "viewer") {
+      if (el.projectSettingsSection) el.projectSettingsSection.style.display = "block";
+      if (el.projectConfigId) el.projectConfigId.textContent = activeProj.id;
+      if (el.projectConfigName) el.projectConfigName.textContent = activeProj.name;
+      if (el.projectConfigArtifactPath) el.projectConfigArtifactPath.textContent = activeProj.artifact_path;
+      if (el.addMemberControlsContainer) el.addMemberControlsContainer.style.display = isProjectAdmin ? "flex" : "none";
+
+      // Render members
+      if (el.projectMembersTableBody) {
+        el.projectMembersTableBody.innerHTML = members.map(member => `
+          <tr style="border-bottom: 1px solid #444c56; color: #adbac7;">
+            <td style="padding: 8px 0;">${escapeHtml(member.user_sub)}</td>
+            <td style="padding: 8px 0;"><span class="badge info" style="font-size: 11px; padding: 2px 8px; border-radius: 4px; background-color: #ddf4ff; color: #0969da; font-weight: 600; text-transform: uppercase;">${escapeHtml(member.role)}</span></td>
+            <td style="padding: 8px 0; text-align: right;">
+              ${isProjectAdmin ? `<button class="btn delete-member-btn" data-sub="${escapeHtml(member.user_sub)}" style="background-color: #cf222e; color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 11px; cursor: pointer;">Remove</button>` : "-"}
+            </td>
+          </tr>
+        `).join("");
+
+        // Bind delete events
+        el.projectMembersTableBody.querySelectorAll(".delete-member-btn").forEach(btn => {
+          btn.addEventListener("click", async () => {
+            const sub = btn.dataset.sub;
+            if (confirm(`Are you sure you want to remove member ${sub}?`)) {
+              try {
+                await fetchJson(`/api/projects/${encodeURIComponent(state.activeProjectId)}/members/${encodeURIComponent(sub)}`, { method: "DELETE" });
+                renderProjectSettings();
+              } catch (err) {
+                alert(`Error removing member: ${err.message || err}`);
+              }
+            }
+          });
+        });
+      }
+    } else {
+      if (el.projectSettingsSection) el.projectSettingsSection.style.display = "none";
+    }
+
+    // Fetch and populate Keycloak users select
+    if (el.newMemberSub) {
+      try {
+        const usersData = await fetchJson("/api/users");
+        const users = Array.isArray(usersData.users) ? usersData.users : [];
+        const existingSubs = new Set(members.map(m => m.user_sub));
+        const availableUsers = users.filter(u => !existingSubs.has(u.sub));
+
+        el.newMemberSub.innerHTML = `
+          <option value="">Select User...</option>
+          ${availableUsers.map(u => `<option value="${escapeHtml(u.sub)}">${escapeHtml(u.label)}</option>`).join("")}
+        `;
+      } catch (err) {
+        console.error("Could not fetch available users:", err);
+      }
+    }
+
+    // Bind Add Member button once
+    if (el.addMemberBtn) {
+      const newBtn = el.addMemberBtn.cloneNode(true);
+      el.addMemberBtn.parentNode.replaceChild(newBtn, el.addMemberBtn);
+      el.addMemberBtn = newBtn;
+      el.addMemberBtn.addEventListener("click", async () => {
+        const sub = el.newMemberSub.value.trim();
+        const role = el.newMemberRole.value;
+        if (!sub) return alert("Please select a user to add");
+        try {
+          await fetchJson(`/api/projects/${encodeURIComponent(state.activeProjectId)}/members`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ user_sub: sub, role })
+          });
+          el.newMemberSub.value = "";
+          renderProjectSettings();
+        } catch (err) {
+          alert(`Error adding member: ${err.message || err}`);
+        }
+      });
+    }
   }
 }
 
@@ -4798,6 +4954,7 @@ async function initializeProjects() {
     el.sidebarProjectsList.querySelectorAll(".manage-projects-sidebar-btn").forEach((btn) => {
       btn.addEventListener("click", (e) => {
         e.preventDefault();
+        state.activeProjectTab = "list";
         setActiveView("projects");
       });
     });

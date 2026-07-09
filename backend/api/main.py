@@ -710,6 +710,36 @@ def create_project(payload: ProjectCreate, current_user: dict[str, Any] = Depend
         if exists:
             raise HTTPException(status_code=400, detail="Project ID already exists")
         
+        # Create projects symlink directory
+        try:
+            projects_dir = ARTIFACT_ROOT / "projects"
+            projects_dir.mkdir(parents=True, exist_ok=True)
+            
+            target_path_str = payload.artifact_path
+            if target_path_str.startswith("/data/yocto/artifacts/"):
+                target_path_str = target_path_str.replace("/data/yocto/artifacts/", "/artifacts/")
+            elif target_path_str.startswith("/data/yocto/artifacts"):
+                target_path_str = target_path_str.replace("/data/yocto/artifacts", "/artifacts")
+                
+            target_path = Path(target_path_str)
+            link_path = projects_dir / payload.id
+            
+            if target_path.exists() and target_path.resolve() == link_path.resolve():
+                print(f"Artifact path {target_path} is already at {link_path}. Skipping symlink creation.")
+            else:
+                if link_path.is_symlink() or link_path.exists():
+                    if link_path.is_symlink():
+                        link_path.unlink()
+                    else:
+                        shutil.rmtree(link_path)
+                
+                if target_path.exists():
+                    os.symlink(target_path, link_path)
+                else:
+                    print(f"Warning: artifact path {target_path} does not exist in container")
+        except Exception as e:
+            print(f"Error creating project symlink: {e}")
+
         conn.execute(
             """
             INSERT INTO projects (id, name, description, artifact_path, created_at, created_by)
@@ -725,11 +755,69 @@ def create_project(payload: ProjectCreate, current_user: dict[str, Any] = Depend
             """,
             (current_user["sub"], payload.id, "admin"),
         )
+        
+        # Trigger indexer rebuild in background
+        try:
+            subprocess.Popen(["python3", "/app/scripts/rebuild-index.py"])
+        except Exception as e:
+            print(f"Error triggering indexer: {e}")
+            
         return {"status": "ok", "project_id": payload.id}
 
 
+def get_keycloak_admin_token() -> str | None:
+    try:
+        base_url = KEYCLOAK_ISSUER.split("/realms/")[0]
+        master_token_url = f"{base_url}/realms/master/protocol/openid-connect/token"
+        payload = {
+            "client_id": "admin-cli",
+            "username": "admin",
+            "password": "admin",
+            "grant_type": "password"
+        }
+        res = requests.post(master_token_url, data=payload, timeout=5)
+        if res.status_code == 200:
+            return res.json().get("access_token")
+    except Exception as e:
+        print(f"Failed to get Keycloak admin token: {e}")
+    return None
+
+
+@app.get("/api/users")
+def list_available_users(current_user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    token = get_keycloak_admin_token()
+    if not token:
+        return {"users": []}
+    
+    try:
+        base_url = KEYCLOAK_ISSUER.split("/realms/")[0]
+        users_url = f"{base_url}/admin/realms/northfi/users"
+        res = requests.get(users_url, headers={"Authorization": f"Bearer {token}"}, timeout=5)
+        if res.status_code == 200:
+            users = []
+            for u in res.json():
+                email = u.get("email")
+                friendly_name = f"{u.get('firstName', '')} {u.get('lastName', '')}".strip()
+                label = u.get("username", "")
+                if friendly_name:
+                    label += f" - {friendly_name}"
+                if email:
+                    label += f" ({email})"
+                users.append({
+                    "sub": u.get("id"),
+                    "username": u.get("username"),
+                    "label": label
+                })
+            users.sort(key=lambda x: x["username"].lower())
+            return {"users": users}
+    except Exception as e:
+        print(f"Failed to fetch users from Keycloak: {e}")
+        
+    return {"users": []}
+
+
 @app.get("/api/projects/{project_id}/members")
-def list_project_members(project_id: str = Depends(verify_project_access(["admin", "approver"]))) -> dict[str, Any]:
+def list_project_members(project_id: str = Depends(verify_project_access(["admin", "approver", "viewer"]))) -> dict[str, Any]:
     with db() as conn:
         rows = conn.execute(
             "SELECT user_sub, role FROM user_projects WHERE project_id = ?",
