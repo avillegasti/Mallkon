@@ -1,7 +1,6 @@
 import json
 import os
 import shutil
-import sqlite3
 import subprocess
 import time
 from contextlib import contextmanager
@@ -10,11 +9,14 @@ from pathlib import Path
 from typing import Any
 
 import requests
+import psycopg2
+import psycopg2.extras
+from psycopg2.pool import SimpleConnectionPool
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from jose import JWTError, jwt
 from pydantic import BaseModel, Field
 
-DB_PATH = os.environ.get("PORTAL_DB_PATH", "/data/portal.db")
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:release_password_secure@db:5432/release_portal")
 KEYCLOAK_ISSUER = os.environ.get("KEYCLOAK_ISSUER", "http://keycloak:8080/realms/northfi")
 ARTIFACT_ROOT = Path(os.environ.get("ARTIFACT_ROOT", "/artifacts"))
 DASHBOARD_DATA_DIR = Path(os.environ.get("DASHBOARD_DATA_DIR", "/artifacts/dashboard"))
@@ -36,75 +38,124 @@ CHECKLIST_BY_KEY = {key: {"key": key, "label": label, "help": help_text} for key
 
 app = FastAPI(title="NorthFi Release Portal API", version="1.0.0")
 
+DB_POOL = None
+
+def get_db_pool():
+    global DB_POOL
+    if DB_POOL is None:
+        DB_POOL = SimpleConnectionPool(1, 20, dsn=DATABASE_URL)
+    return DB_POOL
+
+
+class DbCursorWrapper:
+    def __init__(self, cur):
+        self.cur = cur
+
+    def fetchone(self):
+        return self.cur.fetchone()
+
+    def fetchall(self):
+        return self.cur.fetchall()
+
+    def __iter__(self):
+        return iter(self.cur)
+
+
+class DbConnectionWrapper:
+    def __init__(self, conn):
+        self.conn = conn
+
+    def execute(self, sql: str, params: tuple = ()):
+        # Convert sqlite ? placeholder to postgres %s
+        sql = sql.replace('?', '%s')
+        cur = self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        cur.execute(sql, params)
+        return DbCursorWrapper(cur)
+
+    def executescript(self, sql: str):
+        cur = self.conn.cursor()
+        cur.execute(sql)
+        return DbCursorWrapper(cur)
+
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 @contextmanager
-def db() -> sqlite3.Connection:
-    os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+def db() -> DbConnectionWrapper:
+    pool = get_db_pool()
+    conn = pool.getconn()
     try:
-        conn.execute("PRAGMA foreign_keys = ON")
-        conn.execute("PRAGMA journal_mode = WAL")
-        yield conn
+        wrapper = DbConnectionWrapper(conn)
+        yield wrapper
         conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
     finally:
-        conn.close()
+        pool.putconn(conn)
 
 
 def init_db() -> None:
-    with db() as conn:
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS release_decisions (
-                release_key TEXT PRIMARY KEY,
-                tag TEXT NOT NULL DEFAULT '',
-                build TEXT NOT NULL DEFAULT '',
-                machine TEXT NOT NULL DEFAULT '',
-                manifest TEXT NOT NULL DEFAULT '',
-                commit_sha TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL DEFAULT 'Draft',
-                owner TEXT NOT NULL DEFAULT '',
-                jira_url TEXT NOT NULL DEFAULT '',
-                decision_note TEXT NOT NULL DEFAULT '',
-                last_reviewed_at TEXT NOT NULL DEFAULT '',
-                updated_by TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
+    # Wait for database connection to be ready (useful during docker container startup)
+    retries = 5
+    while retries > 0:
+        try:
+            with db() as conn:
+                conn.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS release_decisions (
+                        release_key TEXT PRIMARY KEY,
+                        tag TEXT NOT NULL DEFAULT '',
+                        build TEXT NOT NULL DEFAULT '',
+                        machine TEXT NOT NULL DEFAULT '',
+                        manifest TEXT NOT NULL DEFAULT '',
+                        commit_sha TEXT NOT NULL DEFAULT '',
+                        status TEXT NOT NULL DEFAULT 'Draft',
+                        owner TEXT NOT NULL DEFAULT '',
+                        jira_url TEXT NOT NULL DEFAULT '',
+                        decision_note TEXT NOT NULL DEFAULT '',
+                        last_reviewed_at TEXT NOT NULL DEFAULT '',
+                        updated_by TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
 
-            CREATE TABLE IF NOT EXISTS release_checklist_items (
-                release_key TEXT NOT NULL,
-                item_key TEXT NOT NULL,
-                label TEXT NOT NULL DEFAULT '',
-                checked INTEGER NOT NULL DEFAULT 0,
-                checked_by TEXT NOT NULL DEFAULT '',
-                checked_at TEXT NOT NULL DEFAULT '',
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (release_key, item_key),
-                FOREIGN KEY (release_key) REFERENCES release_decisions(release_key) ON DELETE CASCADE
-            );
+                    CREATE TABLE IF NOT EXISTS release_checklist_items (
+                        release_key TEXT NOT NULL,
+                        item_key TEXT NOT NULL,
+                        label TEXT NOT NULL DEFAULT '',
+                        checked INTEGER NOT NULL DEFAULT 0,
+                        checked_by TEXT NOT NULL DEFAULT '',
+                        checked_at TEXT NOT NULL DEFAULT '',
+                        updated_at TEXT NOT NULL,
+                        PRIMARY KEY (release_key, item_key),
+                        FOREIGN KEY (release_key) REFERENCES release_decisions(release_key) ON DELETE CASCADE
+                    );
 
-            CREATE TABLE IF NOT EXISTS release_audit_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                release_key TEXT NOT NULL,
-                actor TEXT NOT NULL DEFAULT '',
-                action TEXT NOT NULL,
-                field TEXT NOT NULL DEFAULT '',
-                old_value TEXT NOT NULL DEFAULT '',
-                new_value TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL
-            );
+                    CREATE TABLE IF NOT EXISTS release_audit_log (
+                        id SERIAL PRIMARY KEY,
+                        release_key TEXT NOT NULL,
+                        actor TEXT NOT NULL DEFAULT '',
+                        action TEXT NOT NULL,
+                        field TEXT NOT NULL DEFAULT '',
+                        old_value TEXT NOT NULL DEFAULT '',
+                        new_value TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL
+                    );
 
-            CREATE TABLE IF NOT EXISTS user_profiles (
-                user_sub TEXT PRIMARY KEY,
-                jira_token TEXT NOT NULL DEFAULT ''
-            );
-            """
-        )
+                    CREATE TABLE IF NOT EXISTS user_profiles (
+                        user_sub TEXT PRIMARY KEY,
+                        jira_token TEXT NOT NULL DEFAULT ''
+                    );
+                    """
+                )
+            break
+        except psycopg2.OperationalError as exc:
+            print(f"Database connection failed, retrying... ({retries} left). Error: {exc}", flush=True)
+            time.sleep(2)
+            retries -= 1
 
 
 @app.on_event("startup")
