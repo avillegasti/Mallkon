@@ -8,6 +8,14 @@ export const REQUIRED_RELEASE_LAYER_NAMES = [
 export const REVIEW_STORAGE_KEY = "northfi.releaseReviews.v1";
 export const REVIEW_ACTOR_STORAGE_KEY = "northfi.currentReviewer";
 
+export const KEYCLOAK_ISSUER = `http://${window.location.hostname}:8080/realms/northfi`;
+export const KEYCLOAK_CLIENT_ID = "release-dashboard";
+export const KEYCLOAK_REDIRECT_URI = `${window.location.origin}${window.location.pathname}`;
+export const KEYCLOAK_SCOPE = "openid profile email";
+export const AUTH_STORAGE_KEY = "northfi.auth";
+export const OAUTH_STATE_KEY = "northfi.oauth_state";
+export const PKCE_VERIFIER_KEY = "northfi.pkce_verifier";
+
 export const RELEASE_REVIEW_CHECKS = [
   ["cve_reviewed", "CVEs reviewed", "Open CVEs were inspected and accepted or assigned."],
   ["full_cve_export_reviewed", "Full CVE export reviewed", "CSV/JSON export was generated and reviewed."],

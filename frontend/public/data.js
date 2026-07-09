@@ -1,3 +1,9 @@
+import {
+  AUTH_STORAGE_KEY,
+  KEYCLOAK_CLIENT_ID,
+  KEYCLOAK_ISSUER,
+} from "./config.js";
+
 export function normalizeLoadError(error, path = "", fallbackKind = "load") {
   if (error && typeof error === "object") {
     return {
@@ -45,11 +51,88 @@ export function loadErrorMessage(error) {
   return normalized.message || "The dashboard could not load this data.";
 }
 
-export async function fetchJson(path) {
-  let response;
+function loadStoredAuth() {
   try {
-    const separator = path.includes("?") ? "&" : "?";
-    response = await fetch(`${path}${separator}ts=${Date.now()}`, { cache: "no-store" });
+    const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function saveStoredAuth(auth) {
+  try {
+    window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(auth));
+  } catch (error) {
+    // ignore storage failures
+  }
+}
+
+function clearStoredAuth() {
+  try {
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+  } catch (error) {
+    // ignore storage failures
+  }
+}
+
+function isAuthExpired(auth) {
+  return !auth || !auth.expiresAt || Date.now() >= Number(auth.expiresAt);
+}
+
+async function refreshAccessToken(auth) {
+  if (!auth?.refreshToken) return null;
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    client_id: KEYCLOAK_CLIENT_ID,
+    refresh_token: auth.refreshToken,
+  });
+  const response = await fetch(`${KEYCLOAK_ISSUER}/protocol/openid-connect/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+  if (!response.ok) return null;
+  const data = await response.json();
+  if (!data.access_token) return null;
+
+  const nextAuth = {
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token || auth.refreshToken,
+    idToken: data.id_token || auth.idToken,
+    expiresAt: Date.now() + (Number(data.expires_in || 0) * 1000),
+  };
+  saveStoredAuth(nextAuth);
+  return nextAuth;
+}
+
+async function getValidAccessToken() {
+  let auth = loadStoredAuth();
+  if (!auth) return null;
+  if (isAuthExpired(auth)) {
+    auth = await refreshAccessToken(auth);
+  }
+  if (!auth || isAuthExpired(auth)) {
+    clearStoredAuth();
+    return null;
+  }
+  return auth.accessToken;
+}
+
+export async function fetchJson(path, options = {}) {
+  let response;
+  const separator = path.includes("?") ? "&" : "?";
+  const headers = { ...(options.headers || {}) };
+  if (path.startsWith("/api/")) {
+    const token = await getValidAccessToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+  }
+  try {
+    response = await fetch(`${path}${separator}ts=${Date.now()}`, {
+      cache: "no-store",
+      headers,
+      ...options,
+    });
   } catch (error) {
     throw { kind: "network", path, message: `Request failed for ${path}: ${error.message || error}` };
   }

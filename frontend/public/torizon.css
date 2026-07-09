@@ -1,24 +1,24 @@
 /* Torizon Cloud Theme Overrides */
 
 :root {
-  --t-bg: #f8f9fa; /* Light grey background for content */
-  --t-sidebar-bg: #1c2128; /* Dark navy/black for sidebar */
-  --t-sidebar-text: #adbac7;
+  --t-bg: #f4f6f9; /* Light grey background for content */
+  --t-sidebar-bg: #121212; /* Solid black/very dark gray for sidebar */
+  --t-sidebar-text: #9fa2a7;
   --t-sidebar-text-active: #ffffff;
-  --t-sidebar-active-bg: #2d333b;
-  --t-topbar-bg: #22272e;
-  --t-border: #d0d7de;
+  --t-sidebar-active-bg: rgba(255, 255, 255, 0.08);
+  --t-topbar-bg: #00508f; /* Torizon blue topbar */
+  --t-border: #e2e8f0;
   --t-card-bg: #ffffff;
   --t-text: #24292f;
   --t-muted: #57606a;
-  --t-primary: #0969da;
+  --t-primary: #00508f;
   --t-warning-bg: #fff8c5;
   --t-warning-border: #e6cc13;
   --t-warning-text: #9a6700;
   --t-critical: #cf222e;
   --t-high: #bc4c00;
   --t-medium: #9a6700;
-  --t-low: #0969da;
+  --t-low: #00508f;
   --t-success: #1a7f37;
 }
 
@@ -482,10 +482,18 @@ body.torizon-theme {
 }
 
 .t-cve-table {
-  width: 100%;
+  width: 100% !important;
+  table-layout: auto !important;
   border-collapse: collapse;
   text-align: left;
   font-size: 13px;
+}
+
+.t-cve-table th,
+.t-cve-table td {
+  overflow: visible !important;
+  text-overflow: clip !important;
+  white-space: normal !important;
 }
 
 .t-cve-table th {
@@ -500,7 +508,7 @@ body.torizon-theme {
 .t-cve-table td {
   padding: 12px 16px;
   border-bottom: 1px solid var(--t-border);
-  vertical-align: top;
+  vertical-align: middle;
 }
 
 .t-cve-row {
@@ -515,7 +523,9 @@ body.torizon-theme {
 .t-cve-caret {
   text-align: center;
   color: var(--t-muted);
+  width: 40px;
 }
+
 .caret-icon {
   display: inline-block;
   transition: transform 0.2s;
@@ -524,15 +534,114 @@ body.torizon-theme {
 }
 
 .t-cve-id {
-  font-weight: 500;
-  color: var(--t-text);
+  font-family: monospace;
+  font-weight: 600;
+  color: #0366d6;
+  white-space: nowrap !important;
+  font-size: 13px;
 }
 
-.t-cve-analysis {
-  color: #8b949e;
+.t-cve-component-cell {
+  max-width: 250px;
 }
-.analysis-icon {
-  margin-right: 4px;
+
+.t-cve-component {
+  font-weight: 500;
+  color: #24292f;
+  word-break: break-all;
+}
+
+/* Severity Badges */
+.sev-badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  text-align: center;
+  white-space: nowrap;
+}
+.sev-badge.critical {
+  background-color: #ffeef0;
+  color: #d73a49;
+  border: 1px solid #ffccd1;
+}
+.sev-badge.high {
+  background-color: #fff5eb;
+  color: #e65100;
+  border: 1px solid #ffe0b2;
+}
+.sev-badge.medium {
+  background-color: #fffdf0;
+  color: #b08800;
+  border: 1px solid #fff5b8;
+}
+.sev-badge.low {
+  background-color: #f1f8ff;
+  color: #0366d6;
+  border: 1px solid #c8e1ff;
+}
+.sev-badge.none, .sev-badge.unknown {
+  background-color: #f6f8fa;
+  color: #6a737d;
+  border: 1px solid #e1e4e6;
+}
+
+/* Score Badges */
+.score-badge {
+  display: inline-block;
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-weight: 600;
+  font-family: monospace;
+  font-size: 11px;
+  min-width: 32px;
+  text-align: center;
+}
+.score-badge.score-9, .score-badge.score-10, .score-badge.score-8 {
+  background-color: #d73a49;
+  color: #fff;
+}
+.score-badge.score-7, .score-badge.score-6, .score-badge.score-5 {
+  background-color: #e65100;
+  color: #fff;
+}
+.score-badge.score-4, .score-badge.score-3, .score-badge.score-2, .score-badge.score-1, .score-badge.score-0 {
+  background-color: #f6f8fa;
+  color: #57606a;
+  border: 1px solid #d0d7de;
+}
+
+/* Analysis Status Badges */
+.analysis-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-weight: 500;
+  font-size: 12px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.analysis-badge.status-awaiting-triage {
+  background-color: #fff5eb;
+  color: #e65100;
+  border-color: #ffe0b2;
+}
+.analysis-badge.status-unpatched {
+  background-color: #ffeef0;
+  color: #d73a49;
+  border-color: #ffccd1;
+}
+.analysis-badge.status-patched {
+  background-color: #dcffe4;
+  color: #1a7f37;
+  border-color: #abefb6;
+}
+.analysis-badge.status-ignored {
+  background-color: #f6f8fa;
+  color: #57606a;
+  border-color: #d0d7de;
 }
 
 .t-cve-justification {
@@ -602,6 +711,23 @@ body.torizon-theme {
   text-decoration: underline;
 }
 
+.t-cve-layer {
+  font-family: monospace;
+  font-size: 11px;
+  color: var(--t-muted);
+  background: #f1f3f5;
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  display: inline-block;
+}
+
+.t-cve-table th:last-child,
+.t-cve-table td:last-child {
+  width: auto;
+  min-width: 120px;
+}
+
 .t-cve-empty {
   text-align: center;
   padding: 32px !important;
@@ -660,4 +786,280 @@ body.torizon-theme {
 .cve-ov-count.critical .cve-ov-value { color: var(--t-critical); }
 .cve-ov-count.high .cve-ov-value { color: var(--t-high); }
 .cve-ov-count.total .cve-ov-value { color: var(--t-text); }
+
+/* Custom Overrides for Screenshot Style */
+.version-nav a {
+  transition: color 0.15s ease-in-out;
+}
+.version-nav a:hover {
+  color: #0969da !important;
+  text-decoration: underline !important;
+}
+
+.copy-btn {
+  transition: transform 0.1s ease-in-out, background-color 0.15s ease-in-out;
+}
+.copy-btn:hover {
+  background-color: #f3f4f6 !important;
+  transform: scale(1.1);
+}
+.copy-btn:active {
+  transform: scale(0.95);
+}
+
+.view-full-cve-btn {
+  transition: background-color 0.15s ease-in-out, color 0.15s ease-in-out, border-color 0.15s ease-in-out;
+}
+.view-full-cve-btn:hover {
+  background-color: #0969da !important;
+  color: #fff !important;
+  border-color: #0969da !important;
+}
+
+/* Sidebar Nav styling */
+.sidebar-nav {
+  padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-link {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 10px !important;
+  padding: 10px 20px !important;
+  color: var(--t-sidebar-text);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.2s, color 0.2s;
+}
+
+.nav-link:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--t-sidebar-text-active);
+}
+
+.nav-link.active {
+  background: var(--t-sidebar-active-bg);
+  color: var(--t-sidebar-text-active);
+  font-weight: 600;
+  position: relative;
+}
+
+.nav-link.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background-color: #00508f;
+}
+
+/* Collapsible Nav Groups */
+.nav-group {
+  display: block;
+}
+
+.nav-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  color: var(--t-sidebar-text);
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.2s, color 0.2s;
+}
+
+.nav-group-header:hover {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--t-sidebar-text-active);
+}
+
+/* Hide default details summary marker */
+.nav-group summary::-webkit-details-marker {
+  display: none;
+}
+.nav-group summary {
+  list-style: none;
+}
+
+.nav-icon {
+  opacity: 0.8;
+  flex-shrink: 0;
+  color: #9fa2a7;
+}
+
+.chevron-icon {
+  opacity: 0.6;
+  transition: transform 0.2s ease;
+  color: #9fa2a7;
+}
+
+.nav-group[open] .chevron-icon {
+  transform: rotate(180deg);
+}
+
+.nav-group-items {
+  display: flex;
+  flex-direction: column;
+  background: #181818;
+}
+
+.nav-sub-link {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  padding: 8px 20px 8px 46px !important;
+  color: var(--t-sidebar-text);
+  text-decoration: none;
+  font-size: 12px;
+  font-weight: 400;
+  transition: color 0.2s, background 0.2s;
+}
+
+.nav-sub-link:hover {
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--t-sidebar-text-active);
+}
+
+.nav-sub-link.active {
+  color: #ffffff !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+  font-weight: 600 !important;
+  padding-left: 46px !important;
+  position: relative;
+}
+
+.nav-sub-link.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #539bf5;
+}
+
+/* Segmented Tab controls */
+.torizon-view-tabs {
+  background: #e2e8f0 !important;
+  padding: 4px !important;
+  border-radius: 8px !important;
+  border: none !important;
+  display: inline-flex !important;
+  gap: 4px !important;
+  margin-bottom: 24px !important;
+}
+
+.t-view-tab {
+  background: transparent !important;
+  border: none !important;
+  padding: 8px 20px !important;
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  color: #4b5563 !important;
+  cursor: pointer !important;
+  border-radius: 6px !important;
+  transition: all 0.2s ease !important;
+  border-bottom: none !important;
+}
+
+.t-view-tab:hover {
+  color: #111827 !important;
+}
+
+.t-view-tab.active {
+  background: #ffffff !important;
+  color: #111827 !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1), 0 1px 2px rgba(0,0,0,0.06) !important;
+  font-weight: 600 !important;
+}
+
+/* Premium Health Cards style */
+.health-card {
+  position: relative;
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  border-radius: 8px !important;
+  padding: 16px 16px 48px 16px !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.02), 0 1px 2px rgba(0,0,0,0.01) !important;
+  min-height: 124px !important;
+  display: flex;
+  flex-direction: column;
+}
+
+.health-card span {
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  color: #57606a !important;
+  margin-bottom: 8px !important;
+  text-transform: capitalize !important;
+}
+
+.health-card strong {
+  font-size: 24px !important;
+  font-weight: 700 !important;
+  color: #24292f !important;
+  margin: 0 !important;
+  line-height: 1.25 !important;
+}
+
+.health-card small {
+  font-size: 11px !important;
+  color: #57606a !important;
+  margin-top: 4px !important;
+  display: block !important;
+}
+
+/* Chip icon inside cards */
+.health-card::before {
+  content: "" !important;
+  position: absolute !important;
+  top: 16px !important;
+  right: 16px !important;
+  width: 20px !important;
+  height: 20px !important;
+  opacity: 0.25 !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%2300508f' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2' y='2' width='20' height='20' rx='4'%3E%3C/rect%3E%3Crect x='9' y='9' width='6' height='6'%3E%3C/rect%3E%3Cpath d='M9 1v8M15 1v8M9 15v8M15 15v8M1 9h8M1 15h8M15 9h8M15 15h8'%3E%3C/path%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important;
+  background-size: contain !important;
+}
+
+/* Bottom footer of the health card */
+.health-card::after {
+  content: "View details \203A" !important;
+  position: absolute !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  height: 36px !important;
+  border-top: 1px solid #f1f5f9 !important;
+  display: flex !important;
+  align-items: center !important;
+  padding: 0 16px !important;
+  font-size: 11px !important;
+  font-weight: 500 !important;
+  color: #00508f !important;
+  background: #fafbfb !important;
+  border-bottom-left-radius: 8px !important;
+  border-bottom-right-radius: 8px !important;
+}
+
+.health-card:hover {
+  border-color: #cbd5e1 !important;
+  box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05), 0 2px 4px -1px rgba(0,0,0,0.03) !important;
+  cursor: pointer !important;
+}
+.health-card:hover::after {
+  background: #f1f5f9 !important;
+}
+
+
 

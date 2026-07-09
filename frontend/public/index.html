@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NorthFi Release Operations</title>
+  <link rel="stylesheet" href="styles.css?v=20260702-jira-optional">
+  <link rel="stylesheet" href="torizon.css">
+</head>
+
+<body class="torizon-theme">
+  <!-- Left Sidebar (Torizon Style) -->
+  <aside class="torizon-sidebar" aria-label="Build filters">
+    <!-- Brand Logo -->
+    <div class="brand"
+      style="border-bottom: 1px solid rgba(255,255,255,0.08); padding: 16px 20px; background: #121212; display: flex; align-items: center; gap: 10px;">
+      <svg width="24" height="24" viewBox="0 0 100 100">
+        <!-- Yellow hexagon background -->
+        <polygon points="50,5 95,28 95,72 50,95 5,72 5,28" fill="#eab308" />
+        <!-- Inner black cutout -->
+        <polygon points="50,15 85,33 85,67 50,85 15,67 15,33" fill="#121212" />
+        <!-- Blue inner hexagon -->
+        <polygon points="50,25 75,38 75,62 50,75 25,62 25,38" fill="#539bf5" />
+      </svg>
+      <div style="display: flex; align-items: baseline; font-size: 16px; font-family: 'Inter', sans-serif;">
+        <span style="font-weight: 700; color: #fff;">NorthFi</span>
+        <span style="color: #539bf5; margin-left: 4px; font-weight: 400;">Cloud</span>
+      </div>
+    </div>
+
+    <div class="sidebar-nav">
+      <!-- Dashboard Link -->
+      <a href="#" class="nav-link view-tab active" data-view="overview">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nav-icon">
+          <rect x="3" y="3" width="7" height="9"></rect>
+          <rect x="14" y="3" width="7" height="5"></rect>
+          <rect x="14" y="12" width="7" height="9"></rect>
+          <rect x="3" y="16" width="7" height="5"></rect>
+        </svg>
+        <span>Dashboard</span>
+      </a>
+
+      <!-- Hardware Section -->
+      <details class="nav-group">
+        <summary class="nav-group-header">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nav-icon">
+              <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+              <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+              <line x1="6" y1="6" x2="6.01" y2="6"></line>
+              <line x1="6" y1="18" x2="6.01" y2="18"></line>
+            </svg>
+            <span>Hardware</span>
+          </div>
+          <svg class="chevron-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+            fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </summary>
+        <div class="nav-group-items">
+          <a href="#" class="nav-sub-link">Devices</a>
+          <a href="#" class="nav-sub-link">Fleets</a>
+          <a href="#" class="nav-sub-link">Remote Access</a>
+        </div>
+      </details>
+
+      <!-- Software Section -->
+      <details open class="nav-group">
+        <summary class="nav-group-header">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nav-icon">
+              <polyline points="16 18 22 12 16 6"></polyline>
+              <polyline points="8 6 2 12 8 18"></polyline>
+            </svg>
+            <span>Software</span>
+          </div>
+          <svg class="chevron-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+            fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </summary>
+        <div class="nav-group-items">
+          <a href="#" class="nav-sub-link view-tab" data-view="releases">Releases</a>
+          <a href="#" class="nav-sub-link view-tab" data-view="development">Development</a>
+          <a href="#" class="nav-sub-link view-tab" data-view="attention">Needs Attention</a>
+          <a href="#" class="nav-sub-link view-tab" data-view="compare">Compare</a>
+          <a href="#" class="nav-sub-link view-tab" data-view="lineage">Release Lineage</a>
+        </div>
+      </details>
+
+      <!-- Account Security Section -->
+      <details class="nav-group">
+        <summary class="nav-group-header">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nav-icon">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+            <span>Account Security</span>
+          </div>
+          <svg class="chevron-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+            fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </summary>
+        <div class="nav-group-items">
+          <a href="#" class="nav-sub-link"
+            style="display: flex; align-items: center; justify-content: space-between; width: 100%;">
+            <span>MFA</span>
+            <span class="badge orange"
+              style="background: #ef6c00; color: #fff; font-size: 8px; padding: 2px 4px; border-radius: 4px; font-weight: bold; margin-left: 8px;">OFF</span>
+          </a>
+          <a href="#" class="nav-sub-link">Connected Accounts</a>
+        </div>
+      </details>
+
+      <!-- Settings Section -->
+      <details id="settingsMenu" class="nav-group">
+        <summary class="nav-group-header">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nav-icon">
+              <circle cx="12" cy="12" r="3"></circle>
+              <path
+                d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z">
+              </path>
+            </svg>
+            <span>Settings</span>
+          </div>
+          <svg class="chevron-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+            fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </summary>
+        <div class="nav-group-items">
+          <a href="#" class="nav-sub-link view-tab" data-view="information">Information</a>
+          <a href="#" class="nav-sub-link">Repository</a>
+          <a href="#" class="nav-sub-link">Metrics</a>
+          <a href="#" class="nav-sub-link">Preferences</a>
+        </div>
+      </details>
+
+      <!-- Dashboard Filters (Embed existing filter controls) -->
+      <details open class="nav-group">
+        <summary class="nav-group-header">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nav-icon">
+              <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
+            </svg>
+            <span>Dashboard Filters</span>
+          </div>
+          <svg class="chevron-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+            fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </summary>
+        <div class="nav-group-items"
+          style="padding: 12px 16px; display: flex; flex-direction: column; gap: 12px; background: #121212;">
+          <label class="field"
+            style="color: #768390; font-size: 11px; display: flex; flex-direction: column; gap: 4px;">
+            <span>Search</span>
+            <input id="searchInput" type="search" placeholder="Tag, commit, layer, artifact"
+              style="background: #2d333b; border: 1px solid #444c56; color: #adbac7; border-radius: 4px; padding: 6px 10px; font-size: 13px; width: 100%;">
+          </label>
+          <label class="field"
+            style="color: #768390; font-size: 11px; display: flex; flex-direction: column; gap: 4px;">
+            <span>Machine</span>
+            <select id="machineFilter"
+              style="background: #2d333b; border: 1px solid #444c56; color: #adbac7; border-radius: 4px; padding: 6px 10px; font-size: 13px; width: 100%;"></select>
+          </label>
+          <label id="channelFilterContainer" class="field"
+            style="color: #768390; font-size: 11px; display: flex; flex-direction: column; gap: 4px;">
+            <span>Channel</span>
+            <select id="channelFilter"
+              style="background: #2d333b; border: 1px solid #444c56; color: #adbac7; border-radius: 4px; padding: 6px 10px; font-size: 13px; width: 100%;"></select>
+          </label>
+          <label class="field"
+            style="color: #768390; font-size: 11px; display: flex; flex-direction: column; gap: 4px;">
+            <span>CVE status</span>
+            <select id="cveFilter"
+              style="background: #2d333b; border: 1px solid #444c56; color: #adbac7; border-radius: 4px; padding: 6px 10px; font-size: 13px; width: 100%;">
+              <option value="all">All</option>
+              <option value="unpatched">Has unpatched</option>
+              <option value="clean">No unpatched</option>
+              <option value="missing">No CVE report</option>
+            </select>
+          </label>
+          <label class="field"
+            style="color: #768390; font-size: 11px; display: flex; flex-direction: column; gap: 4px;">
+            <span>CVE severity</span>
+            <select id="severityFilter"
+              style="background: #2d333b; border: 1px solid #444c56; color: #adbac7; border-radius: 4px; padding: 6px 10px; font-size: 13px; width: 100%;">
+              <option value="all">All severities</option>
+              <option value="critical">Critical</option>
+              <option value="high">High</option>
+              <option value="medium">Medium</option>
+              <option value="low">Low</option>
+            </select>
+          </label>
+          <button id="clearFilters" class="promo-btn" type="button"
+            style="width: 100%; margin-top: 6px; background: #444c56; color: #adbac7;">Clear filters</button>
+        </div>
+      </details>
+
+      <!-- Statistics Section (Collapsible) -->
+      <details class="nav-group">
+        <summary class="nav-group-header">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nav-icon">
+              <line x1="18" y1="20" x2="18" y2="10"></line>
+              <line x1="12" y1="20" x2="12" y2="4"></line>
+              <line x1="6" y1="20" x2="6" y2="14"></line>
+            </svg>
+            <span>Statistics</span>
+          </div>
+          <svg class="chevron-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+            fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </summary>
+        <div class="nav-group-items" style="padding: 12px 16px; background: #121212;">
+          <div id="stats" style="font-size: 12px; color: #adbac7; display: flex; flex-direction: column; gap: 8px;">
+          </div>
+        </div>
+      </details>
+
+      <!-- Latest Builds Section (Collapsible) -->
+      <details class="nav-group">
+        <summary class="nav-group-header">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="nav-icon">
+              <circle cx="12" cy="12" r="10"></circle>
+              <polyline points="12 6 12 12 16 14"></polyline>
+            </svg>
+            <span>Latest Builds</span>
+          </div>
+          <svg class="chevron-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24"
+            fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="6 9 12 15 18 9"></polyline>
+          </svg>
+        </summary>
+        <div class="nav-group-items" style="padding: 10px; background: #121212;">
+          <div id="latestList"></div>
+        </div>
+      </details>
+    </div>
+  </aside>
+
+  <!-- Right Main Content Wrapper -->
+  <div class="torizon-main-wrapper">
+    <!-- Topbar (Torizon Style) -->
+    <header class="torizon-topbar"
+      style="background: #00508f; height: 50px; display: flex; align-items: center; justify-content: space-between; padding: 0 20px; border-bottom: none; box-shadow: 0 2px 4px rgba(0,0,0,0.08);">
+      <div style="display: flex; align-items: center; gap: 24px;">
+        <div style="color: #fff; font-weight: 700; font-size: 15px; font-family: 'Inter', sans-serif;">Release
+          Operations</div>
+
+        <!-- Premium Search Bar -->
+        <div class="search-container"
+          style="background: rgba(255, 255, 255, 0.15); border-radius: 4px; padding: 0 12px; display: flex; align-items: center; width: 300px; height: 32px;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="search-icon"
+            style="opacity: 0.8; margin-right: 8px;">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input type="text" placeholder="Search or ask AI... (Ctrl+K)" class="top-search"
+            style="background: transparent; border: none; color: #fff; font-size: 13px; outline: none; width: 100%; opacity: 0.9;"
+            disabled>
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="search-sparkle"
+            style="opacity: 0.8; margin-left: 8px;">
+            <polygon
+              points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2">
+            </polygon>
+          </svg>
+        </div>
+      </div>
+
+      <div class="topbar-right" style="display: flex; align-items: center; gap: 16px;">
+        <button class="topbar-btn"
+          style="color: #fff; display: flex; align-items: center; gap: 6px; font-weight: 500; font-size: 13px; background: none; border: none; cursor: pointer; opacity: 0.9;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+          </svg>
+          Feedback
+        </button>
+
+        <button class="topbar-icon" title="Toggle dark mode" aria-label="Toggle dark mode"
+          style="background: none; border: none; color: #fff; cursor: pointer; display: flex; align-items: center; opacity: 0.9;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+        </button>
+
+        <button class="topbar-icon" title="Help" aria-label="Help"
+          style="background: none; border: none; color: #fff; cursor: pointer; display: flex; align-items: center; opacity: 0.9;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+        </button>
+
+        <button class="topbar-icon" title="Notifications" aria-label="Notifications"
+          style="background: none; border: none; color: #fff; cursor: pointer; display: flex; align-items: center; opacity: 0.9; position: relative;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path>
+            <path d="M13.73 21a2 2 0 0 1-3.46 0"></path>
+          </svg>
+        </button>
+
+        <div style="height: 20px; width: 1px; background: rgba(255,255,255,0.2); margin: 0 4px;"></div>
+
+        <div class="user-profile" style="display: flex; align-items: center; gap: 8px; position: relative; cursor: pointer;">
+          <div class="avatar"
+            style="background: #2d3748; color: #fff; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-weight: 600; font-size: 11px;">
+            AV</div>
+          <div class="user-info" style="display: flex; flex-direction: column; text-align: left;">
+            <div style="display: flex; align-items: center; gap: 4px; line-height: 1;">
+              <span class="user-name" style="font-size: 12px; color: #fff; font-weight: 600;">Alessandro Ville...</span>
+              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                style="color: rgba(255,255,255,0.7);">
+                <polyline points="6 9 12 15 18 9"></polyline>
+              </svg>
+            </div>
+            <span class="user-repo" style="font-size: 9px; color: rgba(255,255,255,0.6); margin-top: 2px;">Personal
+              repository</span>
+          </div>
+
+          <!-- Dropdown Menu -->
+          <div id="profileDropdown" class="profile-dropdown hidden">
+            <div class="profile-dropdown-header">
+              <div class="profile-dropdown-avatar">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M12 2C6.48 2 2 6.48 2 12C2 17.52 6.48 22 12 22C17.52 22 22 17.52 22 12C22 6.48 17.52 2 12 2ZM12 6C13.93 6 15.5 7.57 15.5 9.5C15.5 11.43 13.93 13 12 13C10.07 13 8.5 11.43 8.5 9.5C8.5 7.57 10.07 6 12 6ZM12 20C9.08 20 6.55 18.52 5.12 16.28C5.16 13.98 9.72 12.7 12 12.7C14.27 12.7 18.84 13.98 18.88 16.28C17.45 18.52 14.92 20 12 20Z" fill="#8c959f"/>
+                </svg>
+              </div>
+              <div id="dropdownName" class="profile-dropdown-name">Alessandro Villegas</div>
+              <div id="dropdownEmail" class="profile-dropdown-email">alessandro.villegast@gmail.com</div>
+              <div id="dropdownRole" class="profile-dropdown-role">Role: user</div>
+            </div>
+            <div class="profile-dropdown-menu">
+              <a href="#" id="dropdownMyAccount" class="profile-dropdown-item">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                My Account
+              </a>
+              <a href="#" id="dropdownSignOut" class="profile-dropdown-item sign-out">
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+                Sign Out
+              </a>
+            </div>
+          </div>
+        </div>
+
+        <button id="authButton" class="topbar-btn" type="button"
+          style="display: none !important;">
+          Login
+        </button>
+        <span id="authStatus" style="display: none !important;">Not signed in</span>
+        <button id="refreshButton" class="topbar-icon" title="Refresh data" aria-label="Refresh data"
+          style="background: none; border: none; font-size: 15px; color: #fff; cursor: pointer; display: flex; align-items: center; margin-left: 8px; opacity: 0.9;">&#8635;</button>
+        <span id="indexStatus" style="display: none;"></span>
+      </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="torizon-content">
+
+      <div id="overviewView" class="view-panel active" role="tabpanel">
+        <section class="torizon-card" aria-label="Build health">
+          <div class="card-header">
+            <h2>Build Health</h2>
+            <span id="healthStamp" style="font-size: 12px; color: #768390;"></span>
+          </div>
+          <div class="card-body">
+            <div id="healthGrid" class="health-grid"></div>
+          </div>
+        </section>
+        <section class="torizon-card" aria-label="Regression alerts">
+          <div class="card-header">
+            <h2>Regression Alerts</h2>
+            <span id="regressionStatusDashboard" style="font-size: 12px; color: #768390;"></span>
+          </div>
+          <div class="card-body">
+            <div id="regressionAlertsDashboard" class="regression-alerts"></div>
+          </div>
+        </section>
+      </div>
+
+      <div id="releasesView" class="view-panel hidden" role="tabpanel">
+        <section class="torizon-card" aria-label="Regression alerts">
+          <div class="card-header">
+            <h2>Regression Alerts</h2>
+            <span id="regressionStatus" style="font-size: 12px; color: #768390;"></span>
+          </div>
+          <div class="card-body">
+            <div id="regressionAlerts" class="regression-alerts"></div>
+          </div>
+        </section>
+
+        <section class="torizon-card" aria-label="Releases">
+          <div class="card-header">
+            <div style="display: flex; align-items: center; gap: 16px;">
+              <h2 id="releaseListTitle">Releases</h2>
+              <div id="channelTabsContainer" class="channel-tabs t-channel-tabs" role="tablist" aria-label="Build channel">
+                <button class="channel-tab t-channel-tab active" type="button" data-channel="release" role="tab"
+                  aria-selected="true">Releases</button>
+                <button class="channel-tab t-channel-tab" type="button" data-channel="development" role="tab"
+                  aria-selected="false">Development</button>
+                <button class="channel-tab t-channel-tab" type="button" data-channel="all" role="tab"
+                  aria-selected="false">All</button>
+              </div>
+            </div>
+            <span id="releaseCount" style="font-size: 13px; color: #768390;"></span>
+          </div>
+          <div class="card-body p-0">
+            <div id="releaseTable" class="table-shell"></div>
+          </div>
+        </section>
+
+        <section class="details" aria-label="Selected build">
+          <div id="detailsEmpty" class="empty-state">
+            <h2>Select a build</h2>
+            <p>Import one or more <code>yocto-metadata-*.tar.gz</code> files, then select a build to inspect artifacts,
+              layers, and CVEs.</p>
+          </div>
+          <div id="detailsPanel" class="hidden"></div>
+        </section>
+      </div>
+
+      <div id="attentionView" class="view-panel hidden" role="tabpanel">
+        <section class="torizon-card" aria-label="Needs attention">
+          <div class="card-header">
+            <h2>Needs Attention</h2>
+            <span id="attentionStatus" style="font-size: 12px; color: #768390;"></span>
+          </div>
+          <div class="card-body">
+            <p class="section-subtitle" style="margin-bottom: 16px;">Actionable release/RC tag issues from CVE,
+              flashing, lineage, layer tags, and regression checks.</p>
+            <div id="attentionQueue" class="attention-queue"></div>
+          </div>
+        </section>
+      </div>
+
+      <div id="compareView" class="view-panel hidden" role="tabpanel">
+        <section class="torizon-card compare-page" aria-label="Compare builds">
+          <div class="card-header">
+            <h2>Compare Builds</h2>
+            <span id="compareStatus" style="font-size: 12px; color: #768390;"></span>
+          </div>
+          <div class="card-body">
+            <div class="compare-controls" style="display: flex; gap: 16px; margin-bottom: 20px; align-items: flex-end;">
+              <label class="field" style="margin-bottom: 0;">
+                <span>Base</span>
+                <select id="compareBase"></select>
+              </label>
+              <label class="field" style="margin-bottom: 0;">
+                <span>Target</span>
+                <select id="compareTarget"></select>
+              </label>
+              <button id="compareSwap" class="btn-secondary" type="button">Swap</button>
+            </div>
+            <div id="compareOutput" class="compare-output"></div>
+          </div>
+        </section>
+      </div>
+
+      <div id="lineageView" class="view-panel hidden" role="tabpanel">
+        <section class="torizon-card" aria-label="Release lineage">
+          <div class="card-header">
+            <h2>Release Lineage</h2>
+            <span id="lineageStatus" style="font-size: 12px; color: #768390;"></span>
+          </div>
+          <div class="card-body">
+            <div id="lineageTree" class="lineage-tree"></div>
+          </div>
+      </div>
+
+      <div id="informationView" class="view-panel hidden" role="tabpanel">
+        <section class="torizon-card" aria-label="Information">
+          <div class="card-header">
+            <h2>Settings / Information</h2>
+            <span style="font-size: 12px; color: #768390;">Authentication & Profile Metadata</span>
+          </div>
+          <div class="card-body">
+            <p class="section-subtitle" style="margin-bottom: 20px;">Detailed profile metadata retrieved from Keycloak identity provider.</p>
+            
+            <div style="display: flex; flex-direction: column; gap: 24px;">
+              <div>
+                <h3 style="font-size: 14px; color: #adbac7; font-weight: 600; margin-bottom: 12px; border-bottom: 1px solid #444c56; padding-bottom: 6px;">User Profile</h3>
+                <div style="display: grid; grid-template-columns: 150px 1fr; gap: 8px; font-size: 13px; color: #adbac7;">
+                  <div style="color: #768390;">Full Name:</div>
+                  <div id="infoFullName">-</div>
+                  
+                  <div style="color: #768390;">Username:</div>
+                  <div id="infoUsername">-</div>
+                  
+                  <div style="color: #768390;">Email:</div>
+                  <div id="infoEmail">-</div>
+                  
+                  <div style="color: #768390;">Roles:</div>
+                  <div id="infoRoles" style="display: flex; gap: 4px; flex-wrap: wrap;">-</div>
+                </div>
+              </div>
+              
+              <div>
+                <h3 style="font-size: 14px; color: #adbac7; font-weight: 600; margin-bottom: 12px; border-bottom: 1px solid #444c56; padding-bottom: 6px;">Jira Integration</h3>
+                <div style="display: flex; flex-direction: column; gap: 10px; max-width: 450px;">
+                  <label style="font-size: 13px; color: #768390; display: flex; flex-direction: column; gap: 6px;">
+                    <span>Jira Personal Access Token (PAT) / API Token:</span>
+                    <input id="infoJiraToken" type="password" placeholder="Enter your Jira token" style="padding: 6px 12px; border-radius: 6px; border: 1px solid #444c56; background-color: #22272e; color: #adbac7; font-size: 13px; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='#58a6ff'" onblur="this.style.borderColor='#444c56'">
+                  </label>
+                  <div style="display: flex; align-items: center; gap: 12px;">
+                    <button id="saveJiraTokenBtn" type="button" class="btn" style="background-color: #2da44e; color: white; border: none; padding: 6px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#2c974b'" onmouseout="this.style.backgroundColor='#2da44e'">Save Token</button>
+                    <span id="jiraTokenStatus" style="font-size: 13px; font-weight: 500; min-height: 18px;"></span>
+                  </div>
+                </div>
+              </div>
+              
+              <div>
+                <h3 style="font-size: 14px; color: #adbac7; font-weight: 600; margin-bottom: 12px; border-bottom: 1px solid #444c56; padding-bottom: 6px;">Keycloak Client Connection</h3>
+                <div style="display: grid; grid-template-columns: 150px 1fr; gap: 8px; font-size: 13px; color: #adbac7;">
+                  <div style="color: #768390;">Issuer Authority:</div>
+                  <div id="infoIssuer">-</div>
+                  
+                  <div style="color: #768390;">Client Identifier:</div>
+                  <div id="infoClientId">-</div>
+                  
+                  <div style="color: #768390;">Token Expiry:</div>
+                  <div id="infoExpiry">-</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script type="module" src="app.js?v=20260702-modules"></script>
+</body>
+
+</html>

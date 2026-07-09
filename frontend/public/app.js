@@ -4,6 +4,13 @@ import {
   REQUIRED_RELEASE_LAYER_NAMES,
   REVIEW_ACTOR_STORAGE_KEY,
   REVIEW_STORAGE_KEY,
+  KEYCLOAK_ISSUER,
+  KEYCLOAK_CLIENT_ID,
+  KEYCLOAK_REDIRECT_URI,
+  KEYCLOAK_SCOPE,
+  AUTH_STORAGE_KEY,
+  OAUTH_STATE_KEY,
+  PKCE_VERIFIER_KEY,
 } from "./config.js";
 import {
   fetchJson,
@@ -23,6 +30,461 @@ function releaseLabel(release) {
     release.machine,
     shortCommit(release.commit),
   ].filter(Boolean).join(" | ");
+}
+
+function randomString(length = 32) {
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function base64UrlEncode(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function sha256_fallback(ascii) {
+  function rightRotate(value, amount) {
+    return (value >>> amount) | (value << (32 - amount));
+  }
+  const mathPow = Math.pow;
+  const maxWord = mathPow(2, 32);
+  const words = [];
+  const asciiLength = ascii.length * 8;
+  let hash = [];
+  const k = [];
+  let primeCounter = 0;
+
+  const isPrime = (n) => {
+    for (let factor = 2; factor * factor <= n; factor++) {
+      if (n % factor === 0) return false;
+    }
+    return true;
+  };
+
+  let candidate = 2;
+  while (primeCounter < 64) {
+    if (isPrime(candidate)) {
+      if (primeCounter < 8) {
+        hash[primeCounter] = (mathPow(candidate, .5) * maxWord) | 0;
+      }
+      k[primeCounter] = (mathPow(candidate, 1 / 3) * maxWord) | 0;
+      primeCounter++;
+    }
+    candidate++;
+  }
+  
+  const bytes = [];
+  for (let i = 0; i < ascii.length; i++) {
+    bytes.push(ascii.charCodeAt(i));
+  }
+  
+  bytes.push(0x80);
+  while ((bytes.length % 64) !== 56) {
+    bytes.push(0);
+  }
+  
+  bytes.push(0, 0, 0, 0);
+  bytes.push(
+    (asciiLength >>> 24) & 0xff,
+    (asciiLength >>> 16) & 0xff,
+    (asciiLength >>> 8) & 0xff,
+    asciiLength & 0xff
+  );
+  
+  for (let i = 0; i < bytes.length; i += 4) {
+    words.push((bytes[i] << 24) | (bytes[i + 1] << 16) | (bytes[i + 2] << 8) | bytes[i + 3]);
+  }
+  
+  for (let i = 0; i < words.length; i += 16) {
+    const w = words.slice(i, i + 16);
+    let oldHash = hash.slice(0);
+    
+    for (let j = 0; j < 64; j++) {
+      if (j >= 16) {
+        const s0 = rightRotate(w[j - 15], 7) ^ rightRotate(w[j - 15], 18) ^ (w[j - 15] >>> 3);
+        const s1 = rightRotate(w[j - 2], 17) ^ rightRotate(w[j - 2], 19) ^ (w[j - 2] >>> 10);
+        w[j] = (w[j - 16] + s0 + w[j - 7] + s1) | 0;
+      }
+      
+      const ch = (hash[4] & hash[5]) ^ (~hash[4] & hash[6]);
+      const maj = (hash[0] & hash[1]) ^ (hash[0] & hash[2]) ^ (hash[1] & hash[2]);
+      const S0 = rightRotate(hash[0], 2) ^ rightRotate(hash[0], 13) ^ rightRotate(hash[0], 22);
+      const S1 = rightRotate(hash[4], 6) ^ rightRotate(hash[4], 11) ^ rightRotate(hash[4], 25);
+      
+      const temp1 = (hash[7] + S1 + ch + k[j] + w[j]) | 0;
+      const temp2 = (S0 + maj) | 0;
+      
+      hash = [(temp1 + temp2) | 0].concat(hash);
+      hash[4] = (hash[4] + temp1) | 0;
+      hash.length = 8;
+    }
+    
+    for (let j = 0; j < 8; j++) {
+      hash[j] = (hash[j] + oldHash[j]) | 0;
+    }
+  }
+  
+  const buffer = new ArrayBuffer(32);
+  const view = new DataView(buffer);
+  for (let i = 0; i < 8; i++) {
+    view.setInt32(i * 4, hash[i]);
+  }
+  return buffer;
+}
+
+async function sha256(value) {
+  if (window.isSecureContext && window.crypto && window.crypto.subtle) {
+    const data = new TextEncoder().encode(value);
+    return crypto.subtle.digest("SHA-256", data);
+  }
+  return sha256_fallback(value);
+}
+
+async function buildPkceChallenge() {
+  const verifier = randomString(64);
+  const digest = await sha256(verifier);
+  return { verifier, challenge: base64UrlEncode(digest) };
+}
+
+function decodeJwtPayload(token) {
+  if (!token) return null;
+  const parts = token.split(".");
+  if (parts.length < 2) return null;
+  try {
+    const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const decoded = atob(payload);
+    return JSON.parse(decodeURIComponent(Array.from(decoded, (c) => `%${c.charCodeAt(0).toString(16).padStart(2, "0")}`).join("")));
+  } catch (error) {
+    return null;
+  }
+}
+
+function loadAuthState() {
+  try {
+    const raw = window.localStorage.getItem(AUTH_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function saveAuthState(auth) {
+  try {
+    window.localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(auth));
+  } catch (error) {
+    // ignore local storage errors
+  }
+}
+
+function clearAuthState() {
+  try {
+    window.localStorage.removeItem(AUTH_STORAGE_KEY);
+  } catch (error) {
+    // ignore local storage errors
+  }
+}
+
+function isAuthExpired(auth) {
+  return !auth || !auth.expiresAt || Date.now() >= Number(auth.expiresAt);
+}
+
+function currentUserName() {
+  const auth = loadAuthState();
+  const payload = decodeJwtPayload(auth?.idToken || auth?.accessToken);
+  return payload?.preferred_username || payload?.email || payload?.sub || "";
+}
+
+function currentUserFullName() {
+  const auth = loadAuthState();
+  const payload = decodeJwtPayload(auth?.idToken || auth?.accessToken);
+  return payload?.name || payload?.given_name || payload?.preferred_username || "User";
+}
+
+function currentUserEmail() {
+  const auth = loadAuthState();
+  const payload = decodeJwtPayload(auth?.idToken || auth?.accessToken);
+  return payload?.email || "";
+}
+
+function currentUserRoles() {
+  const auth = loadAuthState();
+  const payload = decodeJwtPayload(auth?.accessToken);
+  if (!payload) return [];
+  const realmRoles = payload?.realm_access?.roles || [];
+  const clientRoles = payload?.resource_access?.[KEYCLOAK_CLIENT_ID]?.roles || [];
+  const groups = (payload?.groups || []).map(group => group.replace(/^\//, ""));
+  const allRoles = [...new Set([...realmRoles, ...clientRoles, ...groups])];
+  return allRoles.filter(role => !role.startsWith("default-roles") && role !== "offline_access" && role !== "uma_authorization");
+}
+
+async function loadUserProfile() {
+  if (!el.infoJiraToken) return;
+  try {
+    const data = await fetchJson("/api/profile");
+    if (data && data.jira_token !== undefined) {
+      el.infoJiraToken.value = data.jira_token;
+    }
+  } catch (error) {
+    console.error("Failed to load user profile:", error);
+  }
+}
+
+function updateAuthUi() {
+  const auth = loadAuthState();
+  const signedIn = auth && !isAuthExpired(auth);
+  el.authButton.textContent = signedIn ? "Logout" : "Login";
+  el.authStatus.textContent = signedIn ? `Signed in as ${currentUserName() || "user"}` : "Not signed in";
+  el.authButton.title = signedIn ? "Sign out of the dashboard" : "Sign in with Keycloak";
+
+  const profileEl = document.querySelector(".user-profile");
+  if (profileEl) {
+    if (signedIn) {
+      profileEl.style.display = "flex";
+      const name = currentUserFullName();
+      const email = currentUserEmail();
+      const roles = currentUserRoles();
+      const nameEl = profileEl.querySelector(".user-name");
+      if (nameEl) nameEl.textContent = name;
+      
+      const avatarEl = profileEl.querySelector(".avatar");
+      if (avatarEl) {
+        const initials = name
+          .split(/[-_.\s]+/)
+          .filter(Boolean)
+          .map(part => part[0].toUpperCase())
+          .join("")
+          .slice(0, 2) || "U";
+        avatarEl.textContent = initials;
+      }
+      
+      const repoEl = profileEl.querySelector(".user-repo");
+      if (repoEl) {
+        repoEl.textContent = roles.length ? `Role: ${roles[0]}` : "Authenticated via Keycloak";
+      }
+
+      // Update dropdown contents
+      if (el.dropdownName) el.dropdownName.textContent = name;
+      if (el.dropdownEmail) el.dropdownEmail.textContent = email;
+      if (el.dropdownRole) {
+        el.dropdownRole.textContent = roles.length ? `Roles: ${roles.join(", ")}` : "Role: user";
+      }
+
+      // Update Settings / Information View panel
+      if (el.infoFullName) el.infoFullName.textContent = name;
+      if (el.infoUsername) el.infoUsername.textContent = currentUserName();
+      if (el.infoEmail) el.infoEmail.textContent = email || "No email available";
+      if (el.infoRoles) {
+        el.infoRoles.innerHTML = roles.length
+          ? roles.map(role => `<span class="badge info" style="font-size: 11px; padding: 2px 8px; border-radius: 4px; background-color: #ddf4ff; color: #0969da; font-weight: 600; text-transform: uppercase;">${role}</span>`).join(" ")
+          : `<span class="badge info" style="font-size: 11px; padding: 2px 8px; border-radius: 4px; background-color: #ddf4ff; color: #0969da; font-weight: 600; text-transform: uppercase;">user</span>`;
+      }
+      if (el.infoIssuer) el.infoIssuer.textContent = KEYCLOAK_ISSUER;
+      if (el.infoClientId) el.infoClientId.textContent = KEYCLOAK_CLIENT_ID;
+      if (el.infoExpiry) {
+        el.infoExpiry.textContent = auth.expiresAt ? new Date(auth.expiresAt).toLocaleString() : "N/A";
+      }
+      loadUserProfile();
+    } else {
+      profileEl.style.display = "none";
+    }
+  }
+}
+
+async function exchangeCodeForToken(code, verifier) {
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    client_id: KEYCLOAK_CLIENT_ID,
+    code,
+    redirect_uri: KEYCLOAK_REDIRECT_URI,
+    code_verifier: verifier,
+  });
+  const response = await fetch(`${KEYCLOAK_ISSUER}/protocol/openid-connect/token`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+  if (!response.ok) {
+    throw new Error(`Keycloak token exchange failed: ${response.status} ${response.statusText}`);
+  }
+  const data = await response.json();
+  if (!data.access_token) {
+    throw new Error("Keycloak token exchange did not return an access token.");
+  }
+  const auth = {
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token,
+    idToken: data.id_token,
+    expiresAt: Date.now() + Number(data.expires_in || 0) * 1000,
+  };
+  saveAuthState(auth);
+  return auth;
+}
+
+function getQueryParams() {
+  return new URLSearchParams(window.location.search);
+}
+
+async function processAuthRedirect() {
+  const params = getQueryParams();
+  const code = params.get("code");
+  const state = params.get("state");
+  const error = params.get("error");
+  if (error) {
+    console.warn("Keycloak login error:", params.get("error_description") || error);
+    window.history.replaceState({}, "", window.location.pathname);
+    return;
+  }
+  if (!code || !state) return;
+
+  const savedState = window.localStorage.getItem(OAUTH_STATE_KEY);
+  const savedVerifier = window.localStorage.getItem(PKCE_VERIFIER_KEY);
+  if (!savedState || savedState !== state || !savedVerifier) {
+    console.warn("Invalid Keycloak state or missing PKCE verifier.");
+    window.history.replaceState({}, "", window.location.pathname);
+    return;
+  }
+
+  try {
+    await exchangeCodeForToken(code, savedVerifier);
+    updateAuthUi();
+  } catch (err) {
+    console.error(err);
+  } finally {
+    window.localStorage.removeItem(OAUTH_STATE_KEY);
+    window.localStorage.removeItem(PKCE_VERIFIER_KEY);
+    window.history.replaceState({}, "", window.location.pathname);
+  }
+}
+
+async function signIn() {
+  const stateValue = randomString(22);
+  const pkce = await buildPkceChallenge();
+  window.localStorage.setItem(OAUTH_STATE_KEY, stateValue);
+  window.localStorage.setItem(PKCE_VERIFIER_KEY, pkce.verifier);
+  const authUrl = new URL(`${KEYCLOAK_ISSUER}/protocol/openid-connect/auth`);
+  authUrl.searchParams.set("client_id", KEYCLOAK_CLIENT_ID);
+  authUrl.searchParams.set("redirect_uri", KEYCLOAK_REDIRECT_URI);
+  authUrl.searchParams.set("response_type", "code");
+  authUrl.searchParams.set("scope", KEYCLOAK_SCOPE);
+  authUrl.searchParams.set("code_challenge", pkce.challenge);
+  authUrl.searchParams.set("code_challenge_method", "S256");
+  authUrl.searchParams.set("state", stateValue);
+  window.location.href = authUrl.toString();
+}
+
+function signOut() {
+  const auth = loadAuthState();
+  const idToken = auth?.idToken;
+
+  clearAuthState();
+  updateAuthUi();
+
+  const logoutUrl = new URL(`${KEYCLOAK_ISSUER}/protocol/openid-connect/logout`);
+  if (idToken) {
+    logoutUrl.searchParams.set("id_token_hint", idToken);
+    logoutUrl.searchParams.set("post_logout_redirect_uri", KEYCLOAK_REDIRECT_URI);
+  } else {
+    logoutUrl.searchParams.set("client_id", KEYCLOAK_CLIENT_ID);
+    logoutUrl.searchParams.set("post_logout_redirect_uri", KEYCLOAK_REDIRECT_URI);
+  }
+
+  window.location.href = logoutUrl.toString();
+}
+
+function bindAuthControls() {
+  if (!el.authButton) return;
+  el.authButton.addEventListener("click", () => {
+    const auth = loadAuthState();
+    if (auth && !isAuthExpired(auth)) {
+      signOut();
+    } else {
+      signIn();
+    }
+  });
+
+  const profileEl = document.querySelector(".user-profile");
+  if (profileEl && el.profileDropdown) {
+    profileEl.addEventListener("click", (e) => {
+      if (e.target.closest(".profile-dropdown")) return;
+      e.stopPropagation();
+      const isHidden = el.profileDropdown.classList.contains("hidden");
+      el.profileDropdown.classList.toggle("hidden", !isHidden);
+    });
+
+    document.addEventListener("click", () => {
+      el.profileDropdown.classList.add("hidden");
+    });
+  }
+
+  if (el.dropdownMyAccount) {
+    el.dropdownMyAccount.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (el.settingsMenu) {
+        el.settingsMenu.open = true;
+      }
+      setActiveView("information");
+    });
+  }
+
+  if (el.dropdownSignOut) {
+    el.dropdownSignOut.addEventListener("click", (e) => {
+      e.preventDefault();
+      signOut();
+    });
+  }
+
+  if (el.saveJiraTokenBtn) {
+    el.saveJiraTokenBtn.addEventListener("click", async () => {
+      const tokenVal = el.infoJiraToken.value.trim();
+      el.saveJiraTokenBtn.disabled = true;
+      el.jiraTokenStatus.textContent = "Saving...";
+      el.jiraTokenStatus.style.color = "#adbac7";
+      try {
+        await fetchJson("/api/profile", {
+          method: "PUT",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ jira_token: tokenVal })
+        });
+        el.jiraTokenStatus.textContent = "Token saved successfully!";
+        el.jiraTokenStatus.style.color = "#2da44e";
+        setTimeout(() => {
+          el.jiraTokenStatus.textContent = "";
+        }, 3000);
+      } catch (error) {
+        el.jiraTokenStatus.textContent = `Error: ${error.message || error}`;
+        el.jiraTokenStatus.style.color = "#dc2626";
+      } finally {
+        el.saveJiraTokenBtn.disabled = false;
+      }
+    });
+  }
+}
+
+function initializeAuth() {
+  bindAuthControls();
+  updateAuthUi();
+
+  const params = getQueryParams();
+  const hasCode = params.has("code") && params.has("state");
+  const hasError = params.has("error");
+
+  if (hasCode || hasError) {
+    return processAuthRedirect();
+  }
+
+  const auth = loadAuthState();
+  if (!auth || isAuthExpired(auth)) {
+    document.body.style.display = "none";
+    signIn();
+    return new Promise(() => {}); // Block loadIndex from fetching any data
+  }
+
+  return Promise.resolve();
 }
 
 function inferChannel(release) {
@@ -68,22 +530,45 @@ function compareCandidates() {
 
 function syncViewTabs() {
   el.viewTabs.forEach((button) => {
-    const active = button.dataset.view === state.activeView;
+    let active = false;
+    const view = button.dataset.view;
+    if (view === "development") {
+      active = (state.activeView === "releases" && state.activeChannel === "development");
+    } else if (view === "releases") {
+      active = (state.activeView === "releases" && state.activeChannel !== "development");
+    } else {
+      active = view === state.activeView;
+    }
     button.classList.toggle("active", active);
     button.setAttribute("aria-selected", active ? "true" : "false");
   });
   el.overviewView?.classList.toggle("hidden", state.activeView !== "overview");
   el.overviewView?.classList.toggle("active", state.activeView === "overview");
+  el.releasesView?.classList.toggle("hidden", state.activeView !== "releases");
+  el.releasesView?.classList.toggle("active", state.activeView === "releases");
   el.attentionView?.classList.toggle("hidden", state.activeView !== "attention");
   el.attentionView?.classList.toggle("active", state.activeView === "attention");
   el.compareView?.classList.toggle("hidden", state.activeView !== "compare");
   el.compareView?.classList.toggle("active", state.activeView === "compare");
   el.lineageView?.classList.toggle("hidden", state.activeView !== "lineage");
-  el.lineageView?.classList.toggle("active", state.activeView === "lineage");
+  el.informationView?.classList.toggle("hidden", state.activeView !== "information");
+  el.informationView?.classList.toggle("active", state.activeView === "information");
+  if (el.channelTabsContainer) el.channelTabsContainer.style.display = "none";
+  if (el.channelFilterContainer) el.channelFilterContainer.style.display = "none";
 }
 
 function setActiveView(view) {
-  state.activeView = ["overview", "attention", "compare", "lineage"].includes(view) ? view : "overview";
+  if (view === "development") {
+    state.activeView = "releases";
+    setActiveChannel("development");
+  } else if (view === "releases") {
+    state.activeView = "releases";
+    if (state.activeChannel === "development") {
+      setActiveChannel("release");
+    }
+  } else {
+    state.activeView = ["overview", "releases", "attention", "compare", "lineage", "information"].includes(view) ? view : "overview";
+  }
   syncViewTabs();
   if (state.activeView === "attention") renderAttention();
   if (state.activeView === "compare") renderCompare();
@@ -108,6 +593,7 @@ function setActiveChannel(channel, options = {}) {
     state.compareRequested = false;
   }
   syncChannelTabs();
+  syncViewTabs();
   populateCompareOptions();
   applyFilters();
 }
@@ -838,38 +1324,43 @@ function renderRegressionAlert(alert) {
 }
 
 function renderRegressionAlerts() {
-  if (!el.regressionAlerts || !el.regressionStatus) return;
   const { latest, previous, sameIdentity } = releaseRegressionPair();
-  if (!latest) {
-    el.regressionStatus.textContent = "No release tags";
-    el.regressionAlerts.innerHTML = `<div class="empty-state"><p>No release/RC builds are available for regression checks.</p></div>`;
-    return;
-  }
-  if (!previous) {
-    el.regressionStatus.textContent = "Need two releases";
-    el.regressionAlerts.innerHTML = `<div class="empty-state"><p>At least two release/RC builds are required for regression checks.</p></div>`;
-    return;
-  }
+  const renderTo = (statusEl, alertsEl) => {
+    if (!statusEl || !alertsEl) return;
+    if (!latest) {
+      statusEl.textContent = "No release tags";
+      alertsEl.innerHTML = `<div class="empty-state"><p>No release/RC builds are available for regression checks.</p></div>`;
+      return;
+    }
+    if (!previous) {
+      statusEl.textContent = "Need two releases";
+      alertsEl.innerHTML = `<div class="empty-state"><p>At least two release/RC builds are required for regression checks.</p></div>`;
+      return;
+    }
 
-  const alerts = releaseRegressionAlerts(latest, previous);
-  el.regressionStatus.textContent = `${releaseName(previous)} -> ${releaseName(latest)}${sameIdentity ? "" : " | fallback baseline"}`;
-  const summaryClass = alerts.some((alert) => alert.level === "danger") ? "danger" : alerts.length ? "warn" : "ok";
-  const summary = `<div class="regression-summary ${summaryClass}">
-    <div>
-      <span>Baseline</span>
-      <button class="inline-link" type="button" data-select-build="${escapeHtml(previous.id)}">${escapeHtml(releaseLabel(previous))}</button>
-    </div>
-    <div>
-      <span>Latest</span>
-      <button class="inline-link" type="button" data-select-build="${escapeHtml(latest.id)}">${escapeHtml(releaseLabel(latest))}</button>
-    </div>
-    <strong>${alerts.length ? `${alerts.length} alert${alerts.length === 1 ? "" : "s"}` : "No regressions detected"}</strong>
-  </div>`;
-  const body = alerts.length
-    ? `<div class="regression-grid">${alerts.map(renderRegressionAlert).join("")}</div>`
-    : `<div class="regression-grid"><div class="regression-alert ok"><span>Regression checks</span><strong>clean</strong><small>No unpatched CVE increase, missing CVE report, flashing gap, untagged layer change, or large package-count shift.</small></div></div>`;
-  el.regressionAlerts.innerHTML = summary + body;
-  bindBuildLinks(el.regressionAlerts);
+    const alerts = releaseRegressionAlerts(latest, previous);
+    statusEl.textContent = `${releaseName(previous)} -> ${releaseName(latest)}${sameIdentity ? "" : " | fallback baseline"}`;
+    const summaryClass = alerts.some((alert) => alert.level === "danger") ? "danger" : alerts.length ? "warn" : "ok";
+    const summary = `<div class="regression-summary ${summaryClass}">
+      <div>
+        <span>Baseline</span>
+        <button class="inline-link" type="button" data-select-build="${escapeHtml(previous.id)}">${escapeHtml(releaseLabel(previous))}</button>
+      </div>
+      <div>
+        <span>Latest</span>
+        <button class="inline-link" type="button" data-select-build="${escapeHtml(latest.id)}">${escapeHtml(releaseLabel(latest))}</button>
+      </div>
+      <strong>${alerts.length ? `${alerts.length} alert${alerts.length === 1 ? "" : "s"}` : "No regressions detected"}</strong>
+    </div>`;
+    const body = alerts.length
+      ? `<div class="regression-grid">${alerts.map(renderRegressionAlert).join("")}</div>`
+      : `<div class="regression-grid"><div class="regression-alert ok"><span>Regression checks</span><strong>clean</strong><small>No unpatched CVE increase, missing CVE report, flashing gap, untagged layer change, or large package-count shift.</small></div></div>`;
+    alertsEl.innerHTML = summary + body;
+    bindBuildLinks(alertsEl);
+  };
+
+  renderTo(el.regressionStatus, el.regressionAlerts);
+  renderTo(el.regressionStatusDashboard, el.regressionAlertsDashboard);
 }
 
 function releaseById(id) {
@@ -1167,6 +1658,10 @@ function renderCompare() {
 
   el.compareStatus.textContent = `${releaseLabel(base)} -> ${releaseLabel(target)}`;
   el.compareOutput.innerHTML = `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;">
+      <button class="link-button" type="button" data-export-compare="csv">Export compare CSV</button>
+      <button class="link-button subtle" type="button" data-export-compare="json">Export compare JSON</button>
+    </div>
     <div class="compare-summary">
       ${renderCompareMetric("Commit", commitChanged ? "changed" : "same", commitChanged ? "warn" : "ok")}
       ${renderCompareMetric("Manifest", manifestChanged ? "changed" : "same", manifestChanged ? "warn" : "ok")}
@@ -1205,6 +1700,7 @@ function renderCompare() {
       ${renderDiffList("Changed CVEs", cveDiff.changed, (entry) => `<div class="item-meta"><strong>${escapeHtml(cveLabel(entry.target))}</strong><br>${escapeHtml(entry.base.status || "")} ${escapeHtml(entry.base.severity || "")} -> ${escapeHtml(entry.target.status || "")} ${escapeHtml(entry.target.severity || "")}</div>`, "No CVE status changes")}
     </div>
   `;
+  bindCompareExports(el.compareOutput);
 }
 
 function latestGroups() {
@@ -1233,7 +1729,7 @@ function renderLatest() {
   el.latestList.querySelectorAll(".latest-item").forEach((button) => {
     button.addEventListener("click", () => {
       state.selectedId = button.dataset.id;
-      state.tab = "summary";
+      state.tab = "security";
       renderAll();
     });
   });
@@ -1304,7 +1800,7 @@ function renderTable() {
   el.releaseTable.querySelectorAll("tr.release-row").forEach((row) => {
     row.addEventListener("click", () => {
       state.selectedId = row.dataset.id;
-      state.tab = "summary";
+      state.tab = "security";
       renderAll();
     });
   });
@@ -1704,13 +2200,11 @@ async function saveReleaseReview(release, review) {
     checks: { ...emptyReview().checks, ...(review.checks || {}) },
   };
   try {
-    const response = await fetch(reviewApiPath(release), {
+    const data = await fetchJson(reviewApiPath(release), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-    const data = await response.json();
     const normalized = normalizeApiReview(data);
     state.reviews.set(release.id, normalized);
     return normalized;
@@ -1905,6 +2399,198 @@ function downloadTextFile(filename, content, type) {
   URL.revokeObjectURL(url);
 }
 
+function compareFileBase(base, target) {
+  return safeFileName([releaseLabel(base), releaseLabel(target), "compare"].filter(Boolean).join("-")) || "compare-export";
+}
+
+function buildCompareExportJson(base, target, baseDetail, targetDetail, baseCve, targetCve, basePackages, targetPackages) {
+  const artifactDiff = compareMaps(
+    mapBy(baseDetail.artifacts || [], (artifact) => artifact.name),
+    mapBy(targetDetail.artifacts || [], (artifact) => artifact.name),
+    (baseArtifact, targetArtifact) => baseArtifact.sha256 !== targetArtifact.sha256 || Number(baseArtifact.size_bytes || 0) !== Number(targetArtifact.size_bytes || 0),
+  );
+  const layerDiff = compareMaps(
+    mapBy(baseDetail.layers || [], (layer) => layer.name),
+    mapBy(targetDetail.layers || [], (layer) => layer.name),
+    (baseLayer, targetLayer) => baseLayer.commit !== targetLayer.commit || baseLayer.branch !== targetLayer.branch,
+  );
+  const cveDiff = compareMaps(
+    mapBy(baseCve.issues || [], cveKey),
+    mapBy(targetCve.issues || [], cveKey),
+    (baseIssue, targetIssue) => baseIssue.status !== targetIssue.status || baseIssue.severity !== targetIssue.severity,
+  );
+  const packageDiff = compareMaps(
+    mapBy(basePackages.packages || [], (pkg) => pkg.name),
+    mapBy(targetPackages.packages || [], (pkg) => pkg.name),
+    (basePkg, targetPkg) => basePkg.version !== targetPkg.version || basePkg.license !== targetPkg.license || basePkg.recipe !== targetPkg.recipe,
+  );
+
+  return JSON.stringify({
+    schema_version: 1,
+    exported_at_utc: new Date().toISOString(),
+    base: {
+      id: base.id,
+      tag: base.tag,
+      artifact_label: base.artifact_label,
+      machine: base.machine,
+      kas_manifest: base.kas_manifest,
+      commit: base.commit,
+      generated: dateLabel(base),
+    },
+    target: {
+      id: target.id,
+      tag: target.tag,
+      artifact_label: target.artifact_label,
+      machine: target.machine,
+      kas_manifest: target.kas_manifest,
+      commit: target.commit,
+      generated: dateLabel(target),
+    },
+    summary: {
+      commit_changed: base.commit !== target.commit,
+      manifest_changed: base.kas_manifest !== target.kas_manifest,
+      machine_changed: base.machine !== target.machine,
+      unpatched_delta: Number(target.cve_summary?.unpatched || 0) - Number(base.cve_summary?.unpatched || 0),
+      base_package_count: packageCountFromData(base, basePackages),
+      target_package_count: packageCountFromData(target, targetPackages),
+      base_artifact_count: Number(baseDetail.artifacts?.length || base.artifact_count || 0),
+      target_artifact_count: Number(targetDetail.artifacts?.length || target.artifact_count || 0),
+      cve_added: cveDiff.added.length,
+      cve_removed: cveDiff.removed.length,
+      cve_changed: cveDiff.changed.length,
+      package_added: packageDiff.added.length,
+      package_removed: packageDiff.removed.length,
+      package_changed: packageDiff.changed.length,
+      artifact_added: artifactDiff.added.length,
+      artifact_removed: artifactDiff.removed.length,
+      artifact_changed: artifactDiff.changed.length,
+      layer_changed: layerDiff.changed.length,
+    },
+    diffs: {
+      artifacts: artifactDiff,
+      layers: layerDiff,
+      packages: packageDiff,
+      cves: cveDiff,
+    },
+    base_cve: baseCve,
+    target_cve: targetCve,
+    base_packages: basePackages,
+    target_packages: targetPackages,
+  }, null, 2) + "\n";
+}
+
+function buildCompareExportCsv(base, target, baseDetail, targetDetail, baseCve, targetCve, basePackages, targetPackages) {
+  const rows = [];
+  const push = (type, category, key, baseValue, targetValue, detail = "") => {
+    rows.push([type, category, key, String(baseValue || ""), String(targetValue || ""), String(detail || "")]);
+  };
+
+  push("metadata", "base", "id", base.id, "");
+  push("metadata", "base", "tag", base.tag, "");
+  push("metadata", "base", "machine", base.machine, "");
+  push("metadata", "target", "id", target.id, "");
+  push("metadata", "target", "tag", target.tag, "");
+  push("metadata", "target", "machine", target.machine, "");
+  push("summary", "commit_changed", "commit", base.commit, target.commit);
+  push("summary", "manifest_changed", "manifest", base.kas_manifest, target.kas_manifest);
+  push("summary", "machine_changed", "machine", base.machine, target.machine);
+  push("summary", "unpatched_delta", "unpatched", Number(base.cve_summary?.unpatched || 0), Number(target.cve_summary?.unpatched || 0));
+  push("summary", "package_count", "package_count", packageCountFromData(base, basePackages), packageCountFromData(target, targetPackages));
+  push("summary", "artifact_count", "artifact_count", Number(baseDetail.artifacts?.length || base.artifact_count || 0), Number(targetDetail.artifacts?.length || target.artifact_count || 0));
+
+  const artifactDiff = compareMaps(
+    mapBy(baseDetail.artifacts || [], (artifact) => artifact.name),
+    mapBy(targetDetail.artifacts || [], (artifact) => artifact.name),
+    (baseArtifact, targetArtifact) => baseArtifact.sha256 !== targetArtifact.sha256 || Number(baseArtifact.size_bytes || 0) !== Number(targetArtifact.size_bytes || 0),
+  );
+  const layerDiff = compareMaps(
+    mapBy(baseDetail.layers || [], (layer) => layer.name),
+    mapBy(targetDetail.layers || [], (layer) => layer.name),
+    (baseLayer, targetLayer) => baseLayer.commit !== targetLayer.commit || baseLayer.branch !== targetLayer.branch,
+  );
+  const cveDiff = compareMaps(
+    mapBy(baseCve.issues || [], cveKey),
+    mapBy(targetCve.issues || [], cveKey),
+    (baseIssue, targetIssue) => baseIssue.status !== targetIssue.status || baseIssue.severity !== targetIssue.severity,
+  );
+  const packageDiff = compareMaps(
+    mapBy(basePackages.packages || [], (pkg) => pkg.name),
+    mapBy(targetPackages.packages || [], (pkg) => pkg.name),
+    (basePkg, targetPkg) => basePkg.version !== targetPkg.version || basePkg.license !== targetPkg.license || basePkg.recipe !== targetPkg.recipe,
+  );
+
+  for (const artifact of artifactDiff.added) {
+    push("artifact_added", "artifact", artifact.name, "", JSON.stringify(artifact));
+  }
+  for (const artifact of artifactDiff.removed) {
+    push("artifact_removed", "artifact", artifact.name, JSON.stringify(artifact), "");
+  }
+  for (const entry of artifactDiff.changed) {
+    push("artifact_changed", "artifact", entry.key, JSON.stringify(entry.base), JSON.stringify(entry.target));
+  }
+  for (const entry of layerDiff.changed) {
+    push("layer_changed", "layer", entry.key, JSON.stringify(entry.base), JSON.stringify(entry.target));
+  }
+  for (const pkg of packageDiff.added) {
+    push("package_added", "package", pkg.name, "", JSON.stringify(pkg));
+  }
+  for (const pkg of packageDiff.removed) {
+    push("package_removed", "package", pkg.name, JSON.stringify(pkg), "");
+  }
+  for (const entry of packageDiff.changed) {
+    push("package_changed", "package", entry.key, JSON.stringify(entry.base), JSON.stringify(entry.target));
+  }
+  for (const issue of cveDiff.added) {
+    push("cve_added", "cve", cveLabel(issue), "", JSON.stringify(issue));
+  }
+  for (const issue of cveDiff.removed) {
+    push("cve_removed", "cve", cveLabel(issue), JSON.stringify(issue), "");
+  }
+  for (const entry of cveDiff.changed) {
+    push("cve_changed", "cve", cveLabel(entry.target), JSON.stringify(entry.base), JSON.stringify(entry.target));
+  }
+
+  const escapeCell = (value) => String(value || "").replace(/"/g, '""');
+  const columns = ["type", "category", "key", "base", "target", "detail"];
+  return [columns.join(","), ...rows.map((row) => row.map((cell) => `"${escapeCell(cell)}"`).join(","))].join("\n") + "\n";
+}
+
+async function exportCompare(baseId, targetId, format = "csv") {
+  const base = releaseById(baseId);
+  const target = releaseById(targetId);
+  if (!base || !target) return;
+  const [baseDetail, targetDetail] = await Promise.all([loadReleaseDetail(base, { render: false }), loadReleaseDetail(target, { render: false })]);
+  const [baseCve, targetCve] = await Promise.all([loadReleaseCve(base, { render: false }), loadReleaseCve(target, { render: false })]);
+  const [basePackages, targetPackages] = await Promise.all([loadReleasePackages(base, { render: false }), loadReleasePackages(target, { render: false })]);
+  if (baseDetail?.error || targetDetail?.error || baseCve?.error || targetCve?.error || basePackages?.error || targetPackages?.error) {
+    alert("Could not export comparison because one or more data files failed to load.");
+    return;
+  }
+  const fileBase = compareFileBase(base, target);
+  if (format === "json") {
+    downloadTextFile(`${fileBase}-compare.json`, buildCompareExportJson(base, target, baseDetail, targetDetail, baseCve, targetCve, basePackages, targetPackages), "application/json;charset=utf-8");
+  } else {
+    downloadTextFile(`${fileBase}-compare.csv`, buildCompareExportCsv(base, target, baseDetail, targetDetail, baseCve, targetCve, basePackages, targetPackages), "text/csv;charset=utf-8");
+  }
+}
+
+function bindCompareExports(root = el.compareOutput) {
+  root.querySelectorAll("[data-export-compare]").forEach((button) => {
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const format = button.dataset.exportCompare || "csv";
+      const prevText = button.textContent;
+      button.disabled = true;
+      button.textContent = format === "json" ? "Exporting JSON..." : "Exporting CSV...";
+      const base = state.compareBaseId;
+      const target = state.compareTargetId;
+      exportCompare(base, target, format).finally(() => {
+        button.disabled = false;
+        button.textContent = prevText;
+      });
+    });
+  });
+}
 
 function cveExportIssues(cve = {}) {
   const issues = Array.isArray(cve.issues) ? cve.issues : [];
@@ -2045,7 +2731,65 @@ function bindCveExports(root = el.detailsPanel) {
 }
 
 
+function getSiblingVersions(release) {
+  let siblings = state.releases.filter(r => 
+    r.machine === release.machine && 
+    (r.kas_manifest === release.kas_manifest || (!r.kas_manifest && !release.kas_manifest))
+  );
+  
+  if (siblings.length <= 1) {
+    siblings = state.releases.filter(r => 
+      r.machine === release.machine && 
+      r.channel === release.channel
+    );
+  }
+  
+  siblings.sort((a, b) => dateValue(a) - dateValue(b));
+  
+  const currentIndex = siblings.findIndex(r => r.id === release.id);
+  const prev = currentIndex > 0 ? siblings[currentIndex - 1] : null;
+  const next = currentIndex < siblings.length - 1 && currentIndex >= 0 ? siblings[currentIndex + 1] : null;
+  
+  return {
+    prev,
+    next,
+    total: siblings.length
+  };
+}
+
+function formatDetailDate(dateStr) {
+  const parsed = Date.parse(dateStr);
+  if (Number.isNaN(parsed)) return dateStr || "not recorded";
+  const date = new Date(parsed);
+  return date.toLocaleString('en-US', {
+    month: '2-digit',
+    day: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true
+  });
+}
+
 function renderDetails() {
+  const scrollX = window.scrollX || window.pageXOffset;
+  const scrollY = window.scrollY || window.pageYOffset;
+  const activeElId = document.activeElement ? document.activeElement.id : null;
+  let selectionStart = null;
+  let selectionEnd = null;
+  if (activeElId) {
+    const activeEl = document.activeElement;
+    if (activeEl.tagName === "INPUT" || activeEl.tagName === "TEXTAREA") {
+      try {
+        selectionStart = activeEl.selectionStart;
+        selectionEnd = activeEl.selectionEnd;
+      } catch (e) {
+        // Ignored
+      }
+    }
+  }
+
   const release = state.filtered.find((item) => item.id === state.selectedId);
   if (!release) {
     el.detailsEmpty.classList.remove("hidden");
@@ -2075,7 +2819,7 @@ function renderDetails() {
     el.detailsPanel.innerHTML = `<div class="details-panel">${renderLoadingNotice("Loading build metadata", "Loading release.json before rendering build details.", detail.path)}</div>`;
     return;
   }
-  if (state.tab === "review" && !isReleaseTag(release)) state.tab = "summary";
+  if (state.tab === "review" && !isReleaseTag(release)) state.tab = "security";
   ensureTabData(release);
   ensureReviewData(release);
   if (state.tab === "review") ensureReviewAuditData(release);
@@ -2087,40 +2831,94 @@ function renderDetails() {
   const sbomBundlePath = sbom.bundle?.path || "";
   const cyclonedxPath = sbom.cyclonedx?.path || "";
 
+  const manifestPath = (release.kas_manifest || release.id || "").replace(/\.yml$/, "");
+  const versionString = release.tag || release.artifact_label || release.id || "";
+  const formattedDate = formatDetailDate(new Date(dateValue(release)));
+  const { prev, next, total } = getSiblingVersions(release);
+
   el.detailsPanel.innerHTML = `
     <div class="details-panel">
-      <div class="section-head">
+      <!-- Breadcrumbs / Top info -->
+      <div style="font-size: 13px; color: #57606a; margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+        <span style="display: inline-flex; align-items: center; justify-content: center; background: #eef2f6; width: 24px; height: 24px; border-radius: 4px;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-settings" style="color: #57606a;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+        </span>
+        <span style="font-weight: 500;">Operating System</span>
+        <span style="background: #e1f5fe; color: #0288d1; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 4px; text-transform: uppercase;">CVE Analysis</span>
+      </div>
+
+      <!-- Title & Main Info -->
+      <div style="margin-bottom: 16px; display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;">
         <div>
-          <h2>${escapeHtml(release.tag || release.artifact_label || release.id)}</h2>
-          <p class="item-meta mono">${escapeHtml(release.id || "")}</p>
-          <p class="item-meta mono">${escapeHtml(release.commit || "")}</p>
+          <h1 style="font-size: 26px; font-weight: 700; margin: 0 0 8px 0; color: #111827; word-break: break-all; font-family: Inter, sans-serif;">${escapeHtml(manifestPath)}</h1>
+          <h2 style="font-size: 18px; font-weight: 500; margin: 0 0 12px 0; color: #4b5563;">${escapeHtml(versionString)}</h2>
+          
+          <!-- Metadata row -->
+          <div style="display: flex; gap: 20px; font-size: 13px; color: #6b7280; flex-wrap: wrap;">
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-calendar"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"></rect><line x1="16" y1="2" x2="16" y2="6"></line><line x1="8" y1="2" x2="8" y2="6"></line><line x1="3" y1="10" x2="21" y2="10"></line></svg>
+              <span>${escapeHtml(formattedDate)}</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-monitor"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+              <span>Not installed on any device</span>
+            </div>
+          </div>
         </div>
-        <div class="header-actions">
-          ${channelBadge(release.channel)}
-          ${readinessBadge(release.flashing || flashingReadiness(detail))}
-          ${cveBadge(summary)}
-          ${reviewBadge(release)}
-          ${cyclonedxPath ? `<a class="link-button subtle" href="data/${escapeHtml(cyclonedxPath)}" download>CycloneDX</a>` : ""}
-          ${sbomBundlePath ? `<a class="link-button subtle" href="data/${escapeHtml(sbomBundlePath)}" download>SPDX</a>` : ""}
-          ${isReleaseTag(release) ? `<button class="link-button" type="button" data-export-report="markdown" data-release-id="${escapeHtml(release.id)}">Export report</button><button class="link-button subtle" type="button" data-export-report="html" data-release-id="${escapeHtml(release.id)}">HTML</button><button class="link-button subtle" type="button" data-export-cve="csv" data-release-id="${escapeHtml(release.id)}">CVE CSV</button><button class="link-button subtle" type="button" data-export-cve="json" data-release-id="${escapeHtml(release.id)}">CVE JSON</button>` : ""}
-          ${azureUrl ? `<a class="link-button" href="${escapeHtml(azureUrl)}" target="_blank" rel="noreferrer">Azure</a>` : ""}
+        ${currentUserRoles().includes("admin")
+          ? `<button type="button" class="delete-build-btn" data-build-id="${escapeHtml(release.id)}" style="background-color: #dc2626; color: white; border: none; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: background-color 0.2s;" onmouseover="this.style.backgroundColor='#b91c1c'" onmouseout="this.style.backgroundColor='#dc2626'">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-trash-2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+              Delete Build
+             </button>`
+          : ""
+        }
+      </div>
+
+      <!-- Version Navigation -->
+      <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-top: 1px solid #e5e7eb; border-bottom: 1px solid #e5e7eb; margin: 20px 0; font-size: 13px; font-weight: 500;">
+        <div>
+          ${prev 
+            ? `<a href="#" class="prev-version-link" data-release-id="${escapeHtml(prev.id)}" style="color: #0288d1; text-decoration: none; display: flex; align-items: center; gap: 4px;">&larr; ${escapeHtml(prev.tag || prev.id)}</a>`
+            : `<span style="color: #9ca3af; display: flex; align-items: center; gap: 4px;">&larr; None</span>`
+          }
+        </div>
+        <div>
+          <span style="color: #0288d1; font-weight: 600;">View All ${total} Versions</span>
+        </div>
+        <div>
+          ${next 
+            ? `<a href="#" class="next-version-link" data-release-id="${escapeHtml(next.id)}" style="color: #0288d1; text-decoration: none; display: flex; align-items: center; gap: 4px;">${escapeHtml(next.tag || next.id)} &rarr;</a>`
+            : `<span style="color: #9ca3af; display: flex; align-items: center; gap: 4px;">None &rarr;</span>`
+          }
         </div>
       </div>
-      <div class="detail-grid">
-        <div class="metric"><span>Channel</span><strong>${escapeHtml(release.channel || "")}</strong></div>
-        <div class="metric"><span>Machine</span><strong>${escapeHtml(release.machine || "")}</strong></div>
-        <div class="metric"><span>Artifacts</span><strong>${Number(release.artifact_count || detail.artifacts?.length || 0)}</strong></div>
-        <div class="metric"><span>Packages</span><strong>${Number(release.package_manifest?.package_count || packages.package_count || 0)}</strong></div>
-        <div class="metric"><span>SBOM docs</span><strong>${Number(sbom.document_count || 0)}</strong></div>
-        <div class="metric"><span>Unpatched CVEs</span><strong>${Number(summary.unpatched || 0)}</strong></div>
+
+      <!-- Header actions / Downloads -->
+      <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px;">
+        ${channelBadge(release.channel)}
+        ${readinessBadge(release.flashing || flashingReadiness(detail))}
+        ${cveBadge(summary)}
+        ${reviewBadge(release)}
+        ${cyclonedxPath ? `<a class="link-button subtle" href="data/${escapeHtml(cyclonedxPath)}" download>CycloneDX</a>` : ""}
+        ${sbomBundlePath ? `<a class="link-button subtle" href="data/${escapeHtml(sbomBundlePath)}" download>SPDX</a>` : ""}
+        ${isReleaseTag(release) ? `<button class="link-button" type="button" data-export-report="markdown" data-release-id="${escapeHtml(release.id)}">Export report</button><button class="link-button subtle" type="button" data-export-report="html" data-release-id="${escapeHtml(release.id)}">HTML</button><button class="link-button subtle" type="button" data-export-cve="csv" data-release-id="${escapeHtml(release.id)}">CVE CSV</button><button class="link-button subtle" type="button" data-export-cve="json" data-release-id="${escapeHtml(release.id)}">CVE JSON</button>` : ""}
+        ${azureUrl ? `<a class="link-button" href="${escapeHtml(azureUrl)}" target="_blank" rel="noreferrer">Azure</a>` : ""}
       </div>
+
       ${renderTabs(release)}
-      <div id="tabContent">${renderTabContent(release, detail, cve, packages)}</div>
+      <div id="tabContent" style="margin-top: 20px;">${renderTabContent(release, detail, cve, packages)}</div>
     </div>
   `;
   el.detailsPanel.querySelectorAll(".tab-button").forEach((button) => {
     button.addEventListener("click", () => {
       state.tab = button.dataset.tab;
+      renderDetails();
+    });
+  });
+  el.detailsPanel.querySelectorAll(".prev-version-link, .next-version-link").forEach((link) => {
+    link.addEventListener("click", (e) => {
+      e.preventDefault();
+      state.selectedId = link.dataset.releaseId;
       renderDetails();
     });
   });
@@ -2142,7 +2940,11 @@ function renderDetails() {
   });
   el.detailsPanel.querySelectorAll("[data-cve-bd-status]").forEach((button) => {
     button.addEventListener("click", () => {
-      state.cveRowStatus = button.dataset.cveBdStatus;
+      const val = button.dataset.cveBdStatus;
+      if (val === "Unpatched" || val === "unpatched") state.cveRowAnalysis = "Awaiting Triage";
+      else if (val === "Patched" || val === "patched") state.cveRowAnalysis = "Fixed";
+      else if (val === "Ignored" || val === "ignored") state.cveRowAnalysis = "Not Affected";
+      else state.cveRowAnalysis = val || "all";
       renderDetails();
     });
   });
@@ -2152,12 +2954,66 @@ function renderDetails() {
       renderDetails();
     });
   });
+  el.detailsPanel.querySelectorAll(".copy-btn").forEach((button) => {
+    button.addEventListener("click", () => {
+      const text = button.dataset.copyText;
+      navigator.clipboard.writeText(text).then(() => {
+        const originalHtml = button.innerHTML;
+        button.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-check" style="color: #1a7f37;"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+        setTimeout(() => {
+          button.innerHTML = originalHtml;
+        }, 1500);
+      });
+    });
+  });
+  el.detailsPanel.querySelectorAll(".delete-build-btn").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const buildId = button.dataset.buildId;
+      if (!confirm(`Are you sure you want to delete the build "${buildId}"? This will permanently remove the build metadata and the source archive files from the filesystem.`)) {
+        return;
+      }
+      button.disabled = true;
+      button.textContent = "Deleting...";
+      
+      try {
+        await fetchJson(`/api/builds/${encodeURIComponent(buildId)}`, {
+          method: "DELETE"
+        });
+        
+        alert("Build successfully deleted.");
+        state.details.delete(buildId);
+        state.cveDetails.delete(buildId);
+        state.packageDetails.delete(buildId);
+        
+        await loadIndex();
+        
+      } catch (err) {
+        alert(`Failed to delete build: ${err.message || err}`);
+        button.disabled = false;
+        button.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-trash-2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg> Delete Build`;
+      }
+    });
+  });
+
   bindCveControls();
   bindPackageControls();
   bindReportExports();
   bindCveExports();
   bindReviewControls(release);
   bindBuildLinks();
+
+  // Restore focus and cursor position
+  if (activeElId) {
+    const activeEl = document.getElementById(activeElId);
+    if (activeEl) {
+      activeEl.focus({ preventScroll: true });
+      if (selectionStart !== null && selectionEnd !== null && typeof activeEl.setSelectionRange === 'function') {
+        activeEl.setSelectionRange(selectionStart, selectionEnd);
+      }
+    }
+  }
+  // Restore scroll position
+  window.scrollTo(scrollX, scrollY);
 }
 
 function renderTabs(release) {
@@ -2193,12 +3049,21 @@ function renderTabContent(release, detail, cve, packages) {
   return renderMetadata(release, detail, cve);
 }
 
+function isReviewEditable() {
+  const roles = currentUserRoles();
+  return roles.includes("admin") || roles.includes("approver");
+}
+
 function renderReleaseReview(release) {
   if (!isReleaseTag(release)) return renderDataNotice("info", "Review applies to release tags", "Development builds do not have a release management checklist.");
   const review = releaseReview(release);
   const progress = reviewProgress(review);
   const updated = reviewTimestampLabel(review.lastReviewedAt || review.updatedAt);
   const sourceLabel = review.source === "database" ? "Saved in portal DB" : review.source === "local-fallback" ? "API unavailable, saved locally" : review.__loading ? "Loading portal review" : "Local draft";
+  
+  const editable = isReviewEditable();
+  const disabledAttr = editable ? "" : "disabled";
+  
   return `<form class="review-form" data-review-form="${escapeHtml(release.id)}">
     <div class="review-summary ${reviewStatusClass(review.status)}">
       <div>
@@ -2211,21 +3076,21 @@ function renderReleaseReview(release) {
     <div class="review-grid">
       <label class="field">
         <span>Status</span>
-        <select data-review-field="status">
+        <select data-review-field="status" ${disabledAttr}>
           ${["Draft", "Under review", "Blocked", "Approved", "Released"].map((status) => `<option value="${escapeHtml(status)}" ${review.status === status ? "selected" : ""}>${escapeHtml(status)}</option>`).join("")}
         </select>
       </label>
       <label class="field">
         <span>Owner</span>
-        <input data-review-field="owner" type="text" value="${escapeHtml(review.owner)}" placeholder="release owner">
+        <input data-review-field="owner" type="text" value="${escapeHtml(review.owner)}" placeholder="release owner" ${disabledAttr}>
       </label>
       <label class="field">
         <span>Reviewer</span>
-        <input data-review-field="actor" type="text" value="${escapeHtml(currentReviewer(review.updatedBy || review.actor || review.owner))}" placeholder="who is updating this review" required>
+        <input data-review-field="actor" type="text" value="${escapeHtml(currentReviewer(review.updatedBy || review.actor || review.owner))}" placeholder="who is updating this review" required ${disabledAttr}>
       </label>
       <label class="field">
         <span>Jira</span>
-        <input data-review-field="jira" type="url" value="${escapeHtml(review.jira)}" placeholder="https://...">
+        <input data-review-field="jira" type="url" value="${escapeHtml(review.jira)}" placeholder="https://..." ${disabledAttr}>
       </label>
     </div>
     <div class="review-checklist">
@@ -2234,9 +3099,15 @@ function renderReleaseReview(release) {
         const stamp = meta.checkedAt ? reviewTimestampLabel(meta.checkedAt) : "";
         const checkedBy = meta.checkedBy ? `Checked by ${escapeHtml(meta.checkedBy)}${stamp ? ` at ${escapeHtml(stamp)}` : ""}` : "Not checked";
         const optional = OPTIONAL_RELEASE_REVIEW_CHECKS.has(key);
+        const inputHtml = editable
+          ? `<input data-review-check="${escapeHtml(key)}" type="checkbox" ${review.checks[key] ? "checked" : ""}>`
+          : (review.checks[key]
+              ? `<div style="color: #15803d; font-weight: bold; font-size: 16px; width: 16px; height: 16px; margin-top: 1px; display: flex; align-items: center; justify-content: center; line-height: 1; user-select: none;">✓</div>`
+              : `<div style="color: #64748b; font-weight: bold; font-size: 16px; width: 16px; height: 16px; margin-top: 1px; display: flex; align-items: center; justify-content: center; line-height: 1; user-select: none;">—</div>`
+            );
         return `
-        <label class="review-check">
-          <input data-review-check="${escapeHtml(key)}" type="checkbox" ${review.checks[key] ? "checked" : ""}>
+        <label class="review-check" ${editable ? "" : 'style="cursor: default;"'}>
+          ${inputHtml}
           <span>
             <strong>${escapeHtml(label)}${optional ? ' <span class="review-check-optional">optional</span>' : ""}</strong>
             <small>${escapeHtml(help)}</small>
@@ -2247,11 +3118,11 @@ function renderReleaseReview(release) {
     </div>
     <label class="field review-note">
       <span>Decision note</span>
-      <textarea data-review-field="note" rows="4" placeholder="Review notes, risk acceptance, pending actions">${escapeHtml(review.note)}</textarea>
+      <textarea data-review-field="note" rows="4" placeholder="Review notes, risk acceptance, pending actions" ${disabledAttr}>${escapeHtml(review.note)}</textarea>
     </label>
     ${renderReviewAudit(release)}
     <div class="review-actions">
-      <button class="link-button" type="submit">Save decision</button>
+      ${editable ? `<button class="link-button" type="submit">Save decision</button>` : ""}
       ${review.jira ? `<a class="link-button subtle" href="${escapeHtml(review.jira)}" target="_blank" rel="noreferrer">Open Jira</a>` : ""}
       <span class="item-meta">Release key: ${escapeHtml(reviewIdentity(release) || release.id)}</span>
     </div>
@@ -2348,7 +3219,7 @@ function selectBuildById(id) {
     el.machineFilter.value = target.machine || "all";
   }
   state.selectedId = target.id;
-  state.tab = "summary";
+  state.tab = "security";
   setActiveView("overview");
   setActiveChannel(target.channel || "all", { resetCompare: false });
 }
@@ -2407,8 +3278,11 @@ function renderSecurity(release, detail, cve) {
   let detailsHtml = "";
   if (expanded) {
     detailsHtml = `
-      ${renderSecurityOverviewPanel(issues, release)}
-      ${renderCveBreakdown(issues, release)}
+      <div style="margin-top: 24px;">
+        ${renderSecurityOverviewPanel(issues, release)}
+        ${renderCveControls(issues)}
+        ${renderCveBreakdown(issues, release)}
+      </div>
     `;
   } else if (cveAvailable && !issues.length) {
     detailsHtml = renderDataNotice("info", "CVE report is clean", "The CVE report is present and has no issues.");
@@ -2416,60 +3290,120 @@ function renderSecurity(release, detail, cve) {
     detailsHtml = renderDataNotice("warn", "CVE report not available", "No CVE report was found for this build.");
   }
 
-  return `<div class="list-block">
-    <div class="security-analysis">
-      <div class="security-head">
-        <div class="security-title-row">
-          <h3>Security Analysis</h3>
-          ${cveAvailable
-            ? (hasCveWarning
-              ? `<span class="security-badge danger">Attention Required</span>`
-              : `<span class="security-badge ok">No Issues</span>`)
-            : `<span class="security-badge unknown">No Report</span>`}
+  const sourceLabel = release.channel === "release" ? "NorthFi Release" : `NorthFi ${release.channel.toUpperCase()}`;
+  const manifestPath = (release.kas_manifest || release.id || "").replace(/\.yml$/, "");
+  const versionString = release.tag || release.artifact_label || release.id || "";
+  const packageId = `${manifestPath}-${versionString}`;
+  const hashVal = release.commit || "";
+
+  return `<div class="list-block" style="display: flex; flex-direction: column; gap: 24px;">
+    <!-- Security Analysis Card -->
+    <div class="torizon-card" style="border: 1px solid #ffd013; border-radius: 8px; overflow: hidden; background: #fff;">
+      <div class="card-header" style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; display: flex; justify-content: space-between; align-items: center; background: #fff;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fd7e14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-alert-triangle"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+          <span style="font-size: 16px; font-weight: 700; color: #1f2937;">Security Analysis</span>
+          <span style="background-color: #ffeef0; color: #cf222e; border: 1px solid #ffccd1; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; text-transform: uppercase;">Attention Required</span>
         </div>
-        ${hasCveWarning
-          ? `<div class="security-warning">
-              <p>This version has critical vulnerabilities. Review recommended.</p>
-            </div>`
-          : cveAvailable
-            ? `<div class="security-clean"><p>No critical or unpatched vulnerabilities detected.</p></div>`
-            : `<div class="security-warning warn"><p>CVE report is not available for this build.</p></div>`}
+        <div>
+          <span style="background-color: #2da44e; color: #fff; font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 700; text-transform: uppercase;">NEW</span>
+        </div>
       </div>
-      ${cveAvailable ? `<div class="security-cve-counts">
-        <div class="cve-count-item total">
-          <span class="cve-count-label">TOTAL CVES</span>
-          <strong class="cve-count-value">${totalCves}</strong>
+      <div class="card-body" style="padding: 20px;">
+        <!-- Alert message banner -->
+        <div style="background-color: #fff8c5; border: 1px solid rgba(225,188,19,0.2); border-radius: 6px; padding: 14px 16px; margin-bottom: 24px; font-size: 14px; color: #24292f; font-weight: 500; display: flex; align-items: center; gap: 8px;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9a6700" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-info"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+          <span>This version has critical vulnerabilities. Review recommended.</span>
         </div>
-        <div class="cve-count-item critical">
-          <span class="cve-count-label">CRITICAL</span>
-          <strong class="cve-count-value">${criticalCount}</strong>
-        </div>
-        <div class="cve-count-item high">
-          <span class="cve-count-label">HIGH</span>
-          <strong class="cve-count-value">${highCount}</strong>
-        </div>
-        <div class="security-cve-actions">
-          <button class="link-button view-full-cve-btn" type="button" data-toggle-security-expand>${expanded ? "Hide Full CVE Analysis" : "View Full CVE Analysis"}</button>
-          <button class="link-button subtle" type="button" data-export-cve="csv" data-release-id="${escapeHtml(release.id)}">Download CVE Report</button>
-        </div>
-      </div>` : ""}
+
+        <!-- CVE Counts and Action button -->
+        ${cveAvailable ? `
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 20px;">
+          <div style="display: flex; gap: 32px;">
+            <!-- Total CVEs -->
+            <div style="display: flex; align-items: center; gap: 12px; border-left: 3px solid #2da44e; padding-left: 14px; min-width: 140px;">
+              <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#2da44e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-shield"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+              <div>
+                <div style="font-size: 26px; font-weight: 700; color: #24292f; line-height: 1.1;">${totalCves}</div>
+                <div style="font-size: 10px; color: #57606a; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;">TOTAL CVES</div>
+              </div>
+            </div>
+            <!-- Critical -->
+            <div style="display: flex; align-items: center; gap: 12px; border-left: 3px solid #cf222e; padding-left: 14px; min-width: 140px;">
+              <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#cf222e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-alert-triangle"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+              <div>
+                <div style="font-size: 26px; font-weight: 700; color: #cf222e; line-height: 1.1;">${criticalCount}</div>
+                <div style="font-size: 10px; color: #57606a; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;">CRITICAL</div>
+              </div>
+            </div>
+            <!-- High -->
+            <div style="display: flex; align-items: center; gap: 12px; border-left: 3px solid #fd7e14; padding-left: 14px; min-width: 140px;">
+              <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fd7e14" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-alert-circle"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+              <div>
+                <div style="font-size: 26px; font-weight: 700; color: #fd7e14; line-height: 1.1;">${highCount}</div>
+                <div style="font-size: 10px; color: #57606a; font-weight: 600; letter-spacing: 0.5px; text-transform: uppercase;">HIGH</div>
+              </div>
+            </div>
+          </div>
+          <div>
+            <button class="link-button view-full-cve-btn" type="button" data-toggle-security-expand style="display: flex; align-items: center; gap: 8px; padding: 8px 16px; border: 1px solid #0969da; border-radius: 6px; background-color: transparent; color: #0969da; font-weight: 600; cursor: pointer; font-size: 13px;">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-activity"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline></svg>
+              <span>${expanded ? "Hide Full CVE Analysis" : "View Full CVE Analysis"}</span>
+            </button>
+          </div>
+        </div>` : ""}
+      </div>
     </div>
-    <div class="package-meta-grid">
-      <div class="package-meta-item">
-        <span class="package-meta-label">Supported Component</span>
-        <strong class="package-meta-value">${escapeHtml(release.machine || "—")}</strong>
+
+    <!-- Additional Information Card -->
+    <div class="torizon-card" style="border: 1px solid #d0d7de; border-radius: 8px; overflow: hidden; background: #fff;">
+      <div class="card-header" style="padding: 16px 20px; border-bottom: 1px solid #f1f5f9; background: #fff;">
+        <h3 style="font-size: 16px; font-weight: 700; margin: 0; color: #1f2937;">Additional Information</h3>
       </div>
-      <div class="package-meta-item">
-        <span class="package-meta-label">Source</span>
-        <strong class="package-meta-value">${escapeHtml(release.kas_manifest || release.channel || "—")}</strong>
-      </div>
-      <div class="package-meta-item">
-        <span class="package-meta-label">Package Type</span>
-        <strong class="package-meta-value">${escapeHtml(inferPackageType(release, detail))}</strong>
-      </div>
-      <div class="package-meta-item">
-        <span class="package-meta-label">Hash</span>
-        <strong class="package-meta-value mono">${escapeHtml(release.commit || "—")}</strong>
+      <div class="card-body" style="padding: 20px; display: flex; flex-direction: column; gap: 16px;">
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <span style="font-size: 12px; color: #57606a; font-weight: 600;">Supported Component</span>
+          <span style="font-size: 14px; font-weight: 600; color: #24292f;">${escapeHtml(release.machine || "—")}</span>
+        </div>
+        
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <span style="font-size: 12px; color: #57606a; font-weight: 600;">Source</span>
+          <div>
+            <span style="background-color: #ddf4ff; color: #0969da; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 4px; display: inline-block;">${escapeHtml(sourceLabel)}</span>
+          </div>
+        </div>
+
+        <div style="border-top: 1px solid #f1f5f9; margin-top: 8px; padding-top: 16px;">
+          <h4 style="font-size: 13px; font-weight: 700; color: #57606a; text-transform: uppercase; margin: 0 0 16px 0; letter-spacing: 0.5px;">Technical Details</h4>
+          
+          <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+            <tbody>
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 10px 0; color: #57606a; width: 140px;">Package Type</td>
+                <td style="padding: 10px 0; font-weight: 600; color: #24292f;">${escapeHtml(inferPackageType(release, detail))}</td>
+              </tr>
+              <tr style="border-bottom: 1px solid #f1f5f9;">
+                <td style="padding: 10px 0; color: #57606a;">Hash (SHA256)</td>
+                <td style="padding: 10px 0; font-family: monospace; font-size: 13px; color: #24292f; display: flex; align-items: center; gap: 8px;">
+                  <span>${escapeHtml(hashVal || "—")}</span>
+                  ${hashVal ? `
+                  <button class="copy-btn" data-copy-text="${escapeHtml(hashVal)}" title="Copy Hash" style="background: none; border: none; padding: 2px; cursor: pointer; color: #0969da; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 4px;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-copy"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  </button>` : ""}
+                </td>
+              </tr>
+              <tr>
+                <td style="padding: 10px 0; color: #57606a;">Package ID</td>
+                <td style="padding: 10px 0; font-family: monospace; font-size: 13px; color: #24292f; display: flex; align-items: center; gap: 8px;">
+                  <span>${escapeHtml(packageId)}</span>
+                  <button class="copy-btn" data-copy-text="${escapeHtml(packageId)}" title="Copy Package ID" style="background: none; border: none; padding: 2px; cursor: pointer; color: #0969da; display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 4px;">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="feather feather-copy"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
     ${detailsHtml}
@@ -2483,49 +3417,165 @@ function renderSecurityOverviewPanel(issues, release) {
   const high = Number(severity.high || 0);
   const unpatchedCount = countUnpatchedIssues(issues);
 
-  return `<div class="cve-overview">
-    <div class="cve-overview-head">
-      <h2>CVEs Overview</h2>
-      <div class="cve-overview-actions">
-        <span class="sbom-download-link" data-export-cve="csv" data-release-id="${escapeHtml(release.id)}">Download SBOM (CycloneDX+VEX)</span>
+  return `<div class="cve-overview" style="background: #fff; border: 1px solid #d0d7de; border-radius: 8px; padding: 24px; display: flex; gap: 48px; align-items: flex-start; justify-content: space-between; font-family: Inter, sans-serif;">
+    <!-- Left stacked details column -->
+    <div style="display: flex; flex-direction: column; gap: 16px; min-width: 200px; text-align: left;">
+      <h3 style="font-size: 18px; font-weight: 700; color: #24292f; margin: 0 0 8px 0;">CVEs Overview</h3>
+      
+      <div style="display: flex; flex-direction: column; gap: 12px; font-size: 14px;">
+        <div style="display: flex; align-items: center; gap: 8px; color: #57606a;">
+          <span style="font-weight: 700; color: #24292f; font-size: 15px; width: 45px; display: inline-block; text-align: left;">${total}</span>
+          <span>Total</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; color: #57606a;">
+          <span style="font-weight: 700; color: #cf222e; font-size: 15px; width: 45px; display: inline-block; text-align: left;">${critical}</span>
+          <span>Critical</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; color: #57606a;">
+          <span style="font-weight: 700; color: #fd7e14; font-size: 15px; width: 45px; display: inline-block; text-align: left;">${high}</span>
+          <span>High</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; color: #57606a;">
+          <span style="font-weight: 700; color: #24292f; font-size: 15px; width: 45px; display: inline-block; text-align: left;">${unpatchedCount}</span>
+          <span>Vulnerable</span>
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px; color: #57606a;">
+          <span style="font-weight: 700; color: #24292f; font-size: 15px; width: 45px; display: inline-block; text-align: left;">0</span>
+          <span>Exploited</span>
+        </div>
+      </div>
+      
+      <div style="border-top: 1px dashed #d0d7de; margin-top: 12px; padding-top: 16px;">
+        <span class="sbom-download-link" data-export-cve="csv" data-release-id="${escapeHtml(release.id)}" style="color: #0969da; cursor: pointer; font-weight: 600; font-size: 14px; text-decoration: none; line-height: 1.4; display: inline-block;">
+          Download SBOM<br>(CycloneDX+VEX)
+        </span>
       </div>
     </div>
-    <div class="cve-overview-body">
+
+    <!-- Right sunburst chart column -->
+    <div style="flex: 1; display: flex; justify-content: center; align-items: center;">
       ${renderCveDonutChart(issues)}
-      <div class="cve-overview-counts">
-        <div class="cve-ov-count total">
-          <span class="cve-ov-label">Total</span>
-          <strong class="cve-ov-value">${total}</strong>
-        </div>
-        <div class="cve-ov-count critical">
-          <span class="cve-ov-label">Critical</span>
-          <strong class="cve-ov-value">${critical}</strong>
-        </div>
-        <div class="cve-ov-count high">
-          <span class="cve-ov-label">High</span>
-          <strong class="cve-ov-value">${high}</strong>
-        </div>
-        <div class="cve-ov-count">
-          <span class="cve-ov-label">Vulnerable</span>
-          <strong class="cve-ov-value">${unpatchedCount}</strong>
-        </div>
-        <div class="cve-ov-count warning">
-          <span class="cve-ov-label">Exploited</span>
-          <strong class="cve-ov-value">0</strong>
-        </div>
-      </div>
     </div>
   </div>`;
 }
 
+function getIssueVex(issue) {
+  const pkg = String(issue.package || "").toLowerCase();
+  const type = (pkg.startsWith("linux-") || pkg === "linux") ? "kernel" : "other";
+
+  const severity = String(issue.severity || "none").toLowerCase();
+
+  // Status mapping to VEX Analysis and Justification
+  const status = String(issue.status || "").toLowerCase();
+  const detail = String(issue.detail || "").toLowerCase();
+
+  let analysis = "Awaiting Triage";
+  let justification = "";
+
+  if (status === "patched") {
+    analysis = "Fixed";
+  } else if (status === "unpatched") {
+    analysis = "Awaiting Triage";
+  } else if (status === "ignored") {
+    if (detail === "disputed") {
+      analysis = "False Positive";
+    } else if (detail === "not-applicable-config") {
+      analysis = "Not Affected";
+      justification = "Requires configuration";
+    } else if (detail === "not-applicable-platform") {
+      analysis = "Not Affected";
+      justification = "Requires environment";
+    } else if (detail === "cpe-incorrect") {
+      analysis = "Not Affected";
+      justification = "Code not present";
+    } else if (detail === "upstream-wontfix") {
+      analysis = "Needs Analysis";
+    } else {
+      analysis = "Not Affected";
+    }
+  }
+
+  // Determine justification based on detail value for other values
+  if (detail.includes("code-not-present") || detail.includes("code_not_present") || detail === "code not present") {
+    justification = "Code not present";
+  } else if (detail.includes("code-not-reachable") || detail.includes("code_not_reachable") || detail === "code not reachable") {
+    justification = "Code not reachable";
+  } else if (detail.includes("requires-configuration") || detail.includes("requires_configuration") || detail === "requires configuration") {
+    justification = "Requires configuration";
+  } else if (detail.includes("requires-dependency") || detail.includes("requires_dependency") || detail === "requires dependency") {
+    justification = "Requires dependency";
+  } else if (detail.includes("requires-environment") || detail.includes("requires_environment") || detail === "requires environment") {
+    justification = "Requires environment";
+  } else if (detail.includes("protected-by-compiler") || detail.includes("protected_by_compiler") || detail === "protected by compiler") {
+    justification = "Protected by compiler";
+  } else if (detail.includes("protected-by-runtime") || detail.includes("protected_by_runtime") || detail === "protected by runtime") {
+    justification = "Protected by runtime";
+  } else if (detail.includes("protected-at-perimeter") || detail.includes("protected_at_perimeter") || detail === "protected at perimeter") {
+    justification = "Protected at perimeter";
+  } else if (detail.includes("protected-by-mitigating-control") || detail.includes("protected_by_mitigating_control") || detail === "protected by mitigating control") {
+    justification = "Protected by mitigating control";
+  }
+
+  // Allow explicit VEX fields if present
+  if (issue.analysis) {
+    analysis = issue.analysis;
+  }
+  if (issue.justification) {
+    justification = issue.justification;
+  }
+
+  return { type, severity, analysis, justification };
+}
+
+const typeOptions = [
+  { value: "all", label: "All" },
+  { value: "kernel", label: "Kernel" },
+  { value: "other", label: "Other" }
+];
+
+const severityOptions = [
+  { value: "all", label: "All" },
+  { value: "critical", label: "Critical" },
+  { value: "high", label: "High" },
+  { value: "medium", label: "Medium" },
+  { value: "low", label: "Low" },
+  { value: "none", label: "None" }
+];
+
+const analysisOptions = [
+  { value: "all", label: "All" },
+  { value: "Fixed", label: "Fixed" },
+  { value: "Vulnerable", label: "Vulnerable" },
+  { value: "Exploited", label: "Exploited" },
+  { value: "Needs Analysis", label: "Needs Analysis" },
+  { value: "Mitigation Available", label: "Mitigation Available" },
+  { value: "False Positive", label: "False Positive" },
+  { value: "Not Affected", label: "Not Affected" },
+  { value: "Awaiting Triage", label: "Awaiting Triage" }
+];
+
+const justificationOptions = [
+  { value: "all", label: "All" },
+  { value: "Code not present", label: "Code not present" },
+  { value: "Code not reachable", label: "Code not reachable" },
+  { value: "Requires configuration", label: "Requires configuration" },
+  { value: "Requires dependency", label: "Requires dependency" },
+  { value: "Requires environment", label: "Requires environment" },
+  { value: "Protected by compiler", label: "Protected by compiler" },
+  { value: "Protected by runtime", label: "Protected by runtime" },
+  { value: "Protected at perimeter", label: "Protected at perimeter" },
+  { value: "Protected by mitigating control", label: "Protected by mitigating control" }
+];
+
 function renderCveBreakdown(issues, release) {
-  const severities = sortedSeverities(issues);
-  const statuses = sortedStatuses(issues);
   const searchQuery = (state.cveRowQuery || "").trim().toLowerCase();
 
   const filtered = issues.filter((issue) => {
-    if (state.cveRowSeverity !== "all" && normalizedSeverity(issue) !== state.cveRowSeverity) return false;
-    if (state.cveRowStatus !== "all" && normalizedStatus(issue) !== state.cveRowStatus) return false;
+    const vex = getIssueVex(issue);
+    if (state.cveRowType !== "all" && vex.type !== state.cveRowType) return false;
+    if (state.cveRowSeverity !== "all" && vex.severity !== state.cveRowSeverity) return false;
+    if (state.cveRowAnalysis !== "all" && vex.analysis !== state.cveRowAnalysis) return false;
+    if (state.cveRowJustification !== "all" && vex.justification !== state.cveRowJustification) return false;
     if (state.cveRowPackage !== "all" && issue.package !== state.cveRowPackage) return false;
     if (searchQuery && !issueSearchText(issue).includes(searchQuery)) return false;
     return true;
@@ -2550,33 +3600,50 @@ function renderCveBreakdown(issues, release) {
           <th>Score</th>
           <th>Analysis</th>
           <th>Justification</th>
+          <th>Layer</th>
         </tr>
       </thead>
       <tbody>
         ${visible.map((issue) => {
+          const vex = getIssueVex(issue);
           const sev = escapeHtml(issue.severity || "Unknown");
           const score = escapeHtml(issue.scorev3 || "N/A");
           const component = `${escapeHtml(issue.package || "unknown")} (${escapeHtml(issue.version || "")})`;
-          const analysisStr = escapeHtml(issue.status || "Awaiting Triage");
+          const analysisStr = escapeHtml(vex.analysis || "Awaiting Triage");
+          const justificationStr = escapeHtml(vex.justification || "—");
+          const layerStr = escapeHtml(issue.layer || "unknown");
+          const issueStatus = String(issue.status || "").toLowerCase();
+          
+          // Fix/patch status derived from available data
+          let fixInfo = "";
+          if (issueStatus === "patched") {
+            fixInfo = `<p><strong>Fix Status:</strong><br><span style="color: #1a7f37; font-weight: 600;">✓ Fixed in this build</span><br>Package version includes the fix: <code>${escapeHtml(issue.version || "unknown")}</code></p>`;
+          } else if (issueStatus === "unpatched") {
+            fixInfo = `<p><strong>Fix Status:</strong><br><span style="color: #cf222e; font-weight: 600;">✗ Not yet fixed</span><br>No fix version available in this build. Current vulnerable version: <code>${escapeHtml(issue.version || "unknown")}</code></p>`;
+          } else if (issueStatus === "ignored") {
+            fixInfo = `<p><strong>Fix Status:</strong><br><span style="color: #57606a; font-weight: 600;">— Ignored</span><br>This CVE has been marked as ignored for this package.</p>`;
+          }
           
           return `
           <tr class="t-cve-row" data-cve-toggle-target="${escapeHtml(issue.id)}">
             <td class="t-cve-caret"><span class="caret-icon">›</span></td>
             <td class="t-cve-id">${escapeHtml(issue.id)}</td>
-            <td>${component}</td>
-            <td>${sev}</td>
-            <td>${score}</td>
-            <td class="t-cve-analysis"><span class="analysis-icon">⚠</span> ${analysisStr}</td>
-            <td><span class="t-cve-justification">....................</span></td>
+            <td class="t-cve-component-cell"><span class="t-cve-component">${component}</span></td>
+            <td><span class="sev-badge ${sev.toLowerCase()}">${sev}</span></td>
+            <td><span class="score-badge score-${Math.floor(Number(issue.scorev3 || 0))}">${score}</span></td>
+            <td><span class="analysis-badge status-${analysisStr.toLowerCase().replace(/\s+/g, '-')}">${analysisStr}</span></td>
+            <td><span class="t-cve-justification">${justificationStr}</span></td>
+            <td><span class="t-cve-layer">${layerStr}</span></td>
           </tr>
           <tr class="t-cve-details-row hidden" id="cve-details-${escapeHtml(issue.id)}">
-            <td colspan="7">
+            <td colspan="8">
               <div class="t-cve-details-content">
                 <div class="t-cve-section">
                   <h4 class="t-cve-section-title">CVE Analysis ℹ️</h4>
                   <div class="t-cve-analysis-box">
                     <strong>Current Status:</strong><br>
                     <span class="analysis-icon">⚠</span> ${analysisStr}
+                    ${justificationStr !== "—" ? `<br><br><strong>Justification:</strong><br>${justificationStr}` : ""}
                   </div>
                 </div>
                 
@@ -2586,7 +3653,8 @@ function renderCveBreakdown(issues, release) {
                     <p><strong>Description:</strong><br>${escapeHtml(issue.summary || issue.description || "")}</p>
                     <p><strong>Severity:</strong><br>${sev} (CVSS Score: ${score})</p>
                     <p><strong>Affected Components:</strong><br><span class="t-code-badge">${component}</span></p>
-                    
+                    <p><strong>Layer:</strong><br><span class="t-code-badge">${layerStr}</span></p>
+                    ${fixInfo}
                     ${issue.link ? `<a href="${escapeHtml(issue.link)}" target="_blank" rel="noreferrer" class="t-cve-link">View full details on National Vulnerability Database ↗</a>` : ""}
                   </div>
                 </div>
@@ -2594,7 +3662,7 @@ function renderCveBreakdown(issues, release) {
             </td>
           </tr>
           `;
-        }).join("") || `<tr><td colspan="7" class="t-cve-empty">No CVE rows match the current filters.</td></tr>`}
+        }).join("") || `<tr><td colspan="8" class="t-cve-empty">No CVE rows match the current filters.</td></tr>`}
       </tbody>
     </table>
     ${hidden > 0 ? `<div class="cve-note">Showing the first ${visible.length} filtered rows. ${hidden} more hidden.</div>` : ""}
@@ -2824,17 +3892,14 @@ function sortedPackages(issues) {
 }
 
 function filteredCveIssues(issues) {
-  const statuses = sortedStatuses(issues);
-  const severities = sortedSeverities(issues);
-  const packages = sortedPackages(issues);
-  const status = statuses.includes(state.cveRowStatus) ? state.cveRowStatus : "all";
-  const severity = severities.includes(state.cveRowSeverity) ? state.cveRowSeverity : "all";
-  const selectedPackage = packages.includes(state.cveRowPackage) ? state.cveRowPackage : "all";
   const query = (state.cveRowQuery || "").trim().toLowerCase();
   return issues.filter((issue) => {
-    if (status !== "all" && normalizedStatus(issue) !== status) return false;
-    if (severity !== "all" && normalizedSeverity(issue) !== severity) return false;
-    if (selectedPackage !== "all" && issue.package !== selectedPackage) return false;
+    const vex = getIssueVex(issue);
+    if (state.cveRowType !== "all" && vex.type !== state.cveRowType) return false;
+    if (state.cveRowSeverity !== "all" && vex.severity !== state.cveRowSeverity) return false;
+    if (state.cveRowAnalysis !== "all" && vex.analysis !== state.cveRowAnalysis) return false;
+    if (state.cveRowJustification !== "all" && vex.justification !== state.cveRowJustification) return false;
+    if (state.cveRowPackage !== "all" && issue.package !== state.cveRowPackage) return false;
     if (query && !issueSearchText(issue).includes(query)) return false;
     return true;
   });
@@ -2853,40 +3918,42 @@ function clearFilters() {
 }
 
 function bindCveControls() {
-  const status = document.getElementById("cveRowStatus");
-  if (!status) return;
+  const queryInput = document.getElementById("cveRowQuery");
+  if (queryInput) {
+    queryInput.addEventListener("input", () => {
+      state.cveRowQuery = queryInput.value || "";
+      renderDetails();
+    });
+  }
 
-  status.addEventListener("change", () => {
-    state.cveRowStatus = filterValue("cveRowStatus");
-    renderDetails();
+  // Bind filter links
+  el.detailsPanel.querySelectorAll(".cve-filter-link").forEach((link) => {
+    link.addEventListener("click", (e) => {
+      e.preventDefault();
+      const key = link.dataset.filterKey;
+      const value = link.dataset.filterValue;
+      state[key] = value;
+      renderDetails();
+    });
   });
-  document.getElementById("cveRowSeverity")?.addEventListener("change", () => {
-    state.cveRowSeverity = filterValue("cveRowSeverity");
-    renderDetails();
-  });
-  document.getElementById("cveRowPackage")?.addEventListener("change", () => {
-    state.cveRowPackage = filterValue("cveRowPackage");
-    renderDetails();
-  });
-  document.getElementById("cveRowQuery")?.addEventListener("change", () => {
-    state.cveRowQuery = filterValue("cveRowQuery", "");
-    renderDetails();
-  });
+
+  // Bind package dropdown
+  const packageSelect = document.getElementById("cveRowPackage");
+  if (packageSelect) {
+    packageSelect.addEventListener("change", () => {
+      state.cveRowPackage = packageSelect.value || "all";
+      renderDetails();
+    });
+  }
+
   document.querySelector("[data-cve-filter-reset]")?.addEventListener("click", () => {
-    state.cveRowStatus = "all";
+    state.cveRowType = "all";
     state.cveRowSeverity = "all";
+    state.cveRowAnalysis = "all";
+    state.cveRowJustification = "all";
     state.cveRowPackage = "all";
     state.cveRowQuery = "";
     renderDetails();
-  });
-  el.detailsPanel.querySelectorAll("[data-cve-package-filter]").forEach((button) => {
-    button.addEventListener("click", () => {
-      state.cveRowPackage = button.dataset.cvePackageFilter || "all";
-      state.cveRowStatus = "all";
-      state.cveRowSeverity = "all";
-      state.cveRowQuery = "";
-      renderDetails();
-    });
   });
 
   // Accordion toggle logic for CVE Torizon table
@@ -2906,33 +3973,80 @@ function bindCveControls() {
   });
 }
 
-function renderCveOption(value, label, selected) {
-  return `<option value="${escapeHtml(value)}" ${value === selected ? "selected" : ""}>${escapeHtml(label)}</option>`;
+function renderFilterRow(label, key, options, issues) {
+  const counts = {};
+  let totalCount = issues.length;
+
+  if (key === "cveRowJustification") {
+    totalCount = issues.filter(issue => getIssueVex(issue).justification !== "").length;
+  }
+
+  issues.forEach((issue) => {
+    const vex = getIssueVex(issue);
+    let val = "";
+    if (key === "cveRowType") val = vex.type;
+    else if (key === "cveRowSeverity") val = vex.severity;
+    else if (key === "cveRowAnalysis") val = vex.analysis;
+    else if (key === "cveRowJustification") val = vex.justification;
+
+    if (val) {
+      counts[val] = (counts[val] || 0) + 1;
+    }
+  });
+
+  const activeValue = state[key] || "all";
+
+  const linksHtml = options.map((opt) => {
+    let count = 0;
+    if (opt.value === "all") {
+      count = totalCount;
+    } else {
+      count = counts[opt.value] || 0;
+    }
+
+    const isActive = activeValue === opt.value;
+    if (isActive) {
+      return `<span style="font-weight: 700; color: #1f2937; margin-right: 14px; cursor: default;">${escapeHtml(opt.label)} (${count})</span>`;
+    } else {
+      return `<a href="#" class="cve-filter-link" data-filter-key="${key}" data-filter-value="${escapeHtml(opt.value)}" style="color: #0969da; text-decoration: none; margin-right: 14px;">${escapeHtml(opt.label)} (${count})</a>`;
+    }
+  }).join("");
+
+  return `<div style="display: flex; align-items: flex-start; gap: 8px; font-size: 13px; line-height: 1.5; margin-bottom: 8px;">
+    <span style="font-weight: 600; color: #57606a; min-width: 90px; text-align: right; margin-right: 8px;">${escapeHtml(label)}:</span>
+    <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+      ${linksHtml}
+    </div>
+  </div>`;
 }
 
 function renderCveControls(issues) {
-  const statuses = sortedStatuses(issues);
-  const severities = sortedSeverities(issues);
   const packages = sortedPackages(issues);
-  const selectedStatus = statuses.includes(state.cveRowStatus) ? state.cveRowStatus : "all";
-  const selectedSeverity = severities.includes(state.cveRowSeverity) ? state.cveRowSeverity : "all";
-  const selectedPackage = packages.includes(state.cveRowPackage) ? state.cveRowPackage : "all";
+  return `<div class="cve-breakdown-panel" style="margin-bottom: 24px;">
+    <h3 style="font-size: 18px; font-weight: 700; color: #24292f; margin: 0 0 16px 0;">CVE Breakdown</h3>
+    
+    <div style="display: flex; gap: 16px; align-items: center; margin-bottom: 16px; flex-wrap: wrap;">
+      <div style="position: relative; width: 260px;">
+        <input id="cveRowQuery" type="text" value="${escapeHtml(state.cveRowQuery || "")}" placeholder="Search" style="width: 100%; padding: 8px 12px 8px 36px; border: 1px solid #d0d7de; border-radius: 6px; font-size: 14px; background: #fff;">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#57606a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="position: absolute; left: 12px; top: 50%; transform: translateY(-50%); pointer-events: none;"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+      </div>
+      
+      <div style="display: flex; align-items: center; gap: 8px; font-size: 14px; color: #24292f;">
+        <span style="font-weight: 600;">Package:</span>
+        <select id="cveRowPackage" style="padding: 7px 12px; border: 1px solid #d0d7de; border-radius: 6px; font-size: 14px; background: #fff; min-width: 180px; max-width: 280px; cursor: pointer;">
+          <option value="all">All packages</option>
+          ${packages.map((pkg) => `<option value="${escapeHtml(pkg)}" ${pkg === state.cveRowPackage ? "selected" : ""}>${escapeHtml(pkg)}</option>`).join("")}
+        </select>
+      </div>
+    </div>
 
-  return `<div class="cve-filter-panel">
-    <label class="field"><span>Status</span><select id="cveRowStatus">
-      ${renderCveOption("all", "All statuses", selectedStatus)}
-      ${statuses.map((status) => renderCveOption(status, status, selectedStatus)).join("")}
-    </select></label>
-    <label class="field"><span>Severity</span><select id="cveRowSeverity">
-      ${renderCveOption("all", "All severities", selectedSeverity)}
-      ${severities.map((severity) => renderCveOption(severity, severity, selectedSeverity)).join("")}
-    </select></label>
-    <label class="field"><span>Package</span><select id="cveRowPackage">
-      ${renderCveOption("all", "All packages", selectedPackage)}
-      ${packages.map((pkg) => renderCveOption(pkg, pkg, selectedPackage)).join("")}
-    </select></label>
-    <label class="field"><span>Search rows</span><input id="cveRowQuery" type="search" value="${escapeHtml(state.cveRowQuery || "")}" placeholder="CVE, package, layer"></label>
-    <button class="link-button" type="button" data-cve-filter-reset>Reset</button>
+    <div style="margin-bottom: 12px; font-size: 12px; color: #57606a; font-weight: 600;">Filter by:</div>
+    <div style="display: flex; flex-direction: column; gap: 4px;">
+      ${renderFilterRow("Type", "cveRowType", typeOptions, issues)}
+      ${renderFilterRow("Severity", "cveRowSeverity", severityOptions, issues)}
+      ${renderFilterRow("Analysis", "cveRowAnalysis", analysisOptions, issues)}
+      ${renderFilterRow("Justification", "cveRowJustification", justificationOptions, issues)}
+    </div>
   </div>`;
 }
 
@@ -3046,129 +4160,145 @@ function renderPackageSummary(issues) {
   </section>`;
 }
 
+function getArcPath(cx, cy, r1, r2, startAngle, endAngle) {
+  // SVG arcs use degrees, convert to radians.
+  // Subtract 90 degrees to start at 12 o'clock.
+  const startRad1 = (startAngle - 90) * Math.PI / 180;
+  const endRad1 = (endAngle - 90) * Math.PI / 180;
+  
+  const x1_inner = cx + r1 * Math.cos(startRad1);
+  const y1_inner = cy + r1 * Math.sin(startRad1);
+  const x2_inner = cx + r1 * Math.cos(endRad1);
+  const y2_inner = cy + r1 * Math.sin(endRad1);
+  
+  const x1_outer = cx + r2 * Math.cos(startRad1);
+  const y1_outer = cy + r2 * Math.sin(startRad1);
+  const x2_outer = cx + r2 * Math.cos(endRad1);
+  const y2_outer = cy + r2 * Math.sin(endRad1);
+  
+  const largeArcFlag = (endAngle - startAngle) > 180 ? 1 : 0;
+  
+  return `
+    M ${x1_outer} ${y1_outer}
+    A ${r2} ${r2} 0 ${largeArcFlag} 1 ${x2_outer} ${y2_outer}
+    L ${x2_inner} ${y2_inner}
+    A ${r1} ${r1} 0 ${largeArcFlag} 0 ${x1_inner} ${y1_inner}
+    Z
+  `;
+}
+
+function drawRing(cx, cy, innerR, outerR, segments, totalCount) {
+  let currentAngle = 0;
+  let pathsHtml = "";
+  let textsHtml = "";
+  
+  for (const seg of segments) {
+    if (seg.value === 0) continue;
+    const angleSpan = (seg.value / totalCount) * 360;
+    const startAngle = currentAngle;
+    const endAngle = currentAngle + angleSpan;
+    
+    const pathD = getArcPath(cx, cy, innerR, outerR, startAngle, endAngle);
+    pathsHtml += `<path d="${pathD}" fill="${seg.color}" stroke="#fff" stroke-width="1.5" />`;
+    
+    const midAngle = startAngle + angleSpan / 2;
+    const rMid = (innerR + outerR) / 2;
+    const midRad = (midAngle - 90) * Math.PI / 180;
+    
+    const tx = cx + rMid * Math.cos(midRad);
+    const ty = cy + rMid * Math.sin(midRad);
+    
+    let textRot = midAngle;
+    if (textRot > 90 && textRot < 270) {
+      textRot += 180;
+    }
+    
+    if (angleSpan > 6) {
+      textsHtml += `<text x="${tx}" y="${ty}" transform="rotate(${textRot} ${tx} ${ty})" text-anchor="middle" dominant-baseline="middle" fill="#24292f" font-size="8" font-weight="600" font-family="Inter, sans-serif">${escapeHtml(seg.label)}</text>`;
+    }
+    
+    currentAngle += angleSpan;
+  }
+  
+  return { pathsHtml, textsHtml };
+}
+
 function cveConcentricDonut(issues) {
-  // Colors
-  const severityColors = {
-    critical: "#b42318", high: "#d66b08", medium: "#d6a008",
-    low: "#4f7d95", none: "#94a3b8", unknown: "#cbd5e1",
-  };
-  const typeColors = { kernel: "#2563eb", other: "#7c3aed", unknown: "#cbd5e1" };
+  if (!issues || !issues.length) return "";
 
-  // Inner ring: severity
-  const severityCounts = {};
-  let total = 0;
-  for (const issue of issues) {
-    const sev = normalizedSeverity(issue);
-    severityCounts[sev] = (severityCounts[sev] || 0) + 1;
-    total++;
-  }
-  const sevOrder = ["critical", "high", "medium", "low", "none", "unknown"];
-
-  // Outer ring: type (kernel layer vs other)
-  const typeCounts = {};
-  for (const issue of issues) {
-    const layer = (issue.layer || "").toLowerCase();
-    const type = layer.includes("kernel") ? "kernel" : "other";
-    typeCounts[type] = (typeCounts[type] || 0) + 1;
-  }
-  const typeOrder = ["kernel", "other"];
-
-  if (!total) return "";
-
-  const size = 200;
+  const total = issues.length;
+  const size = 340;
   const cx = size / 2;
   const cy = size / 2;
-  const innerR = 50;
-  const outerR = 72;
-  const strokeInner = 18;
-  const strokeOuter = 14;
-  const circumferenceInner = 2 * Math.PI * innerR;
-  const circumferenceOuter = 2 * Math.PI * outerR;
 
-  function buildCircle(segments, circum, r, sw) {
-    let offset = 0;
-    return segments.map(({ key, value, color }) => {
-      const len = (value / total) * circum;
-      const seg = { color, offset, length: len, key, value };
-      offset += len;
-      return seg;
-    }).map((seg) =>
-      `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${seg.color}" stroke-width="${sw}"
-        stroke-dasharray="${seg.length} ${circum - seg.length}"
-        stroke-dashoffset="${-seg.offset}"
-        transform="rotate(-90 ${cx} ${cy})"
-        stroke-linecap="butt"/>`
-    ).join("");
-  }
-
-  const innerData = sevOrder
-    .filter((k) => (severityCounts[k] || 0) > 0)
-    .map((k) => ({ key: k, value: severityCounts[k], color: severityColors[k] || severityColors.unknown }));
-  const outerData = typeOrder
-    .filter((k) => (typeCounts[k] || 0) > 0)
-    .map((k) => ({ key: k, value: typeCounts[k], color: typeColors[k] || typeColors.unknown }));
-
-  // Legend items combining both rings
-  const legendItems = [
-    ...innerData.map((d) => ({ label: d.key, count: d.value, color: d.color })),
-    ...outerData.map((d) => ({ label: d.key === "kernel" ? "Kernel" : "Other", count: d.value, color: d.color })),
+  // Innermost ring: Type (Kernel vs Other)
+  const kernelCount = issues.filter(i => (i.layer || "").toLowerCase().includes("kernel")).length;
+  const otherCount = total - kernelCount;
+  const ring1Segs = [
+    { label: "Kernel", value: kernelCount, color: "#93c5fd" },
+    { label: "Other", value: otherCount, color: "#a5f3fc" }
   ];
 
-  // Text labels around the donut
-  const labelRadius = outerR + 20;
-  function labelPositions() {
-    const items = [];
-    let cumulative = 0;
-    for (const d of innerData) {
-      const startAngle = (cumulative / total) * 360 - 90;
-      const midAngle = startAngle + ((d.value / total) * 360) / 2;
-      const rad = (midAngle * Math.PI) / 180;
-      items.push({
-        label: d.key,
-        x: cx + labelRadius * Math.cos(rad),
-        y: cy + labelRadius * Math.sin(rad),
-        color: d.color,
-      });
-      cumulative += d.value;
-    }
-    return items;
+  // Middle ring: Severity (Critical, High, Medium, Low, None)
+  const sevCounts = {};
+  for (const issue of issues) {
+    const sev = normalizedSeverity(issue);
+    sevCounts[sev] = (sevCounts[sev] || 0) + 1;
   }
-  const labels = labelPositions();
+  const ring2Segs = [
+    { label: "Critical", value: sevCounts.critical || 0, color: "#fca5a5" },
+    { label: "High", value: sevCounts.high || 0, color: "#fed7aa" },
+    { label: "Medium", value: sevCounts.medium || 0, color: "#fef08a" },
+    { label: "Low", value: sevCounts.low || 0, color: "#bfdbfe" },
+    { label: "None", value: (sevCounts.none || 0) + (sevCounts.unknown || 0), color: "#f3f4f6" }
+  ];
 
-  return `<div class="cve-donut-wrapper">
-    <svg width="${size + 40}" height="${size + 40}" viewBox="0 0 ${size + 40} ${size + 40}" class="cve-donut-svg">
-      <!-- Background circles -->
-      <circle cx="${cx + 20}" cy="${cy + 20}" r="${innerR}" fill="none" stroke="#e8edf2" stroke-width="${strokeInner}"/>
-      <circle cx="${cx + 20}" cy="${cy + 20}" r="${outerR}" fill="none" stroke="#e8edf2" stroke-width="${strokeOuter}"/>
-      <!-- Inner ring segments -->
-      ${buildCircle(innerData, circumferenceInner, innerR, strokeInner)}
-      <!-- Outer ring segments -->
-      ${buildCircle(outerData, circumferenceOuter, outerR, strokeOuter)}
-      <!-- Center text -->
-      <text x="${cx + 20}" y="${cy + 16}" text-anchor="middle" fill="var(--ink)" font-size="22" font-weight="800">${total}</text>
-      <text x="${cx + 20}" y="${cy + 32}" text-anchor="middle" fill="var(--muted)" font-size="10" font-weight="650">Total</text>
-      <!-- Labels around donut -->
-      ${labels.map((l) => {
-        const textAnchor = l.x > cx + 20 ? "start" : l.x < cx + 20 ? "end" : "middle";
-        const dy = l.y > cy + 20 ? "12" : "-4";
-        return `
-          <text x="${l.x + 20}" y="${l.y + 22 + Number(dy)}" text-anchor="${textAnchor}" fill="${l.color}" font-size="10" font-weight="700" dy="${dy}">${escapeHtml(l.label)}</text>
-          <circle cx="${l.x + 20 - 8}" cy="${l.y + 20 + 2}" r="3" fill="${l.color}"/>`;
-      }).join("")}
-    </svg>
-    <div class="cve-donut-legend">
-      <div class="cve-donut-legend-group"><span class="cve-donut-legend-title">Severity</span>
-        ${innerData.map((d) =>
-          `<span class="cve-donut-legend-item"><i style="background:${d.color}"></i>${escapeHtml(d.key)} (${d.value})</span>`
-        ).join("")}
-      </div>
-      <div class="cve-donut-legend-group"><span class="cve-donut-legend-title">Type</span>
-        ${outerData.map((d) =>
-          `<span class="cve-donut-legend-item"><i style="background:${d.color}"></i>${escapeHtml(d.key === "kernel" ? "Kernel" : "Other")} (${d.value})</span>`
-        ).join("")}
-      </div>
+  // Outermost ring: Status (Awaiting Triage, Mitigation Available, Not Affected, False Positive, etc.)
+  const statusCounts = {};
+  for (const issue of issues) {
+    const statusStr = issue.status || "Awaiting Triage";
+    statusCounts[statusStr] = (statusCounts[statusStr] || 0) + 1;
+  }
+  const ring3Segs = Object.keys(statusCounts).map(statusKey => {
+    let color = "#e5e7eb";
+    if (statusKey === "Awaiting Triage") color = "#9ca3af";
+    else if (statusKey === "Mitigation Available") color = "#bfdbfe";
+    else if (statusKey === "Not Affected") color = "#a7f3d0";
+    else if (statusKey === "False Positive") color = "#fcd34d";
+    else if (statusKey === "Fixed") color = "#86efac";
+    else if (statusKey === "Needs Analysis") color = "#fed7aa";
+    
+    return {
+      label: statusKey,
+      value: statusCounts[statusKey],
+      color: color
+    };
+  });
+
+  const r1 = drawRing(cx, cy, 50, 90, ring1Segs, total);
+  const r2 = drawRing(cx, cy, 92, 135, ring2Segs, total);
+  const r3 = drawRing(cx, cy, 137, 152, ring3Segs, total);
+
+  return `
+    <div style="position: relative; width: ${size}px; height: ${size}px;">
+      <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+        <!-- Inner ring paths & text -->
+        ${r1.pathsHtml}
+        ${r1.textsHtml}
+        
+        <!-- Middle ring paths & text -->
+        ${r2.pathsHtml}
+        ${r2.textsHtml}
+        
+        <!-- Outer ring paths & text -->
+        ${r3.pathsHtml}
+        ${r3.textsHtml}
+        
+        <!-- Center white mask for clean donut look -->
+        <circle cx="${cx}" cy="${cy}" r="49" fill="#fff" />
+      </svg>
     </div>
-  </div>`;
+  `;
 }
 
 function renderCveDonutChart(data) {
@@ -3450,4 +4580,4 @@ el.compareSwap.addEventListener("click", () => {
   renderCompare();
 });
 syncViewTabs();
-loadIndex();
+initializeAuth().finally(loadIndex);
