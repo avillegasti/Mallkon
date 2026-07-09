@@ -209,6 +209,14 @@ function currentUserEmail() {
   return payload?.email || "";
 }
 
+
+function currentUserSub() {
+  const auth = loadAuthState();
+  const payload = decodeJwtPayload(auth?.idToken || auth?.accessToken);
+  return payload?.sub || "";
+}
+
+
 function currentUserRoles() {
   const auth = loadAuthState();
   const payload = decodeJwtPayload(auth?.accessToken);
@@ -229,6 +237,129 @@ async function loadUserProfile() {
     }
   } catch (error) {
     console.error("Failed to load user profile:", error);
+  }
+  renderProjectSettings();
+}
+
+async function renderProjectSettings() {
+  const roles = currentUserRoles();
+  const isAdmin = roles.includes("admin");
+  
+  if (isAdmin) {
+    if (el.globalAdminSection) el.globalAdminSection.style.display = "block";
+  } else {
+    if (el.globalAdminSection) el.globalAdminSection.style.display = "none";
+  }
+
+  const activeProj = state.projects.find(p => p.id === state.activeProjectId);
+  if (!activeProj) {
+    if (el.projectSettingsSection) el.projectSettingsSection.style.display = "none";
+    return;
+  }
+
+  // Check project membership role
+  let userProjectRole = null;
+  let members = [];
+  try {
+    const membersData = await fetchJson(`/api/projects/${encodeURIComponent(state.activeProjectId)}/members`);
+    members = Array.isArray(membersData.members) ? membersData.members : [];
+    const self = members.find(m => m.user_sub === currentUserSub());
+    userProjectRole = self ? self.role : null;
+  } catch (err) {
+    console.error("Could not fetch project members", err);
+  }
+
+  const isProjectAdmin = isAdmin || userProjectRole === "admin";
+  if (isProjectAdmin || userProjectRole === "approver" || userProjectRole === "viewer") {
+    if (el.projectSettingsSection) el.projectSettingsSection.style.display = "block";
+    if (el.projectConfigId) el.projectConfigId.textContent = activeProj.id;
+    if (el.projectConfigName) el.projectConfigName.textContent = activeProj.name;
+    if (el.projectConfigArtifactPath) el.projectConfigArtifactPath.textContent = activeProj.artifact_path;
+
+    // Render members
+    if (el.projectMembersTableBody) {
+      el.projectMembersTableBody.innerHTML = members.map(member => `
+        <tr style="border-bottom: 1px solid #444c56; color: #adbac7;">
+          <td style="padding: 8px 0;">${escapeHtml(member.user_sub)}</td>
+          <td style="padding: 8px 0;"><span class="badge info" style="font-size: 11px; padding: 2px 8px; border-radius: 4px; background-color: #ddf4ff; color: #0969da; font-weight: 600; text-transform: uppercase;">${escapeHtml(member.role)}</span></td>
+          <td style="padding: 8px 0; text-align: right;">
+            ${isProjectAdmin ? `<button class="btn delete-member-btn" data-sub="${escapeHtml(member.user_sub)}" style="background-color: #cf222e; color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 11px; cursor: pointer;">Remove</button>` : "-"}
+          </td>
+        </tr>
+      `).join("");
+
+      // Bind delete events
+      el.projectMembersTableBody.querySelectorAll(".delete-member-btn").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          const sub = btn.dataset.sub;
+          if (confirm(`Are you sure you want to remove member ${sub}?`)) {
+            try {
+              await fetchJson(`/api/projects/${encodeURIComponent(state.activeProjectId)}/members/${encodeURIComponent(sub)}`, { method: "DELETE" });
+              renderProjectSettings();
+            } catch (err) {
+              alert(`Error removing member: ${err.message || err}`);
+            }
+          }
+        });
+      });
+    }
+  } else {
+    if (el.projectSettingsSection) el.projectSettingsSection.style.display = "none";
+  }
+
+  // Bind Add Member button once
+  if (el.addMemberBtn) {
+    const newBtn = el.addMemberBtn.cloneNode(true);
+    el.addMemberBtn.parentNode.replaceChild(newBtn, el.addMemberBtn);
+    el.addMemberBtn = newBtn;
+    el.addMemberBtn.addEventListener("click", async () => {
+      const sub = el.newMemberSub.value.trim();
+      const role = el.newMemberRole.value;
+      if (!sub) return alert("Please enter User Sub ID");
+      try {
+        await fetchJson(`/api/projects/${encodeURIComponent(state.activeProjectId)}/members`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ user_sub: sub, role })
+        });
+        el.newMemberSub.value = "";
+        renderProjectSettings();
+      } catch (err) {
+        alert(`Error adding member: ${err.message || err}`);
+      }
+    });
+  }
+
+  // Bind Create Project button once
+  if (el.createProjectBtn) {
+    const newBtn = el.createProjectBtn.cloneNode(true);
+    el.createProjectBtn.parentNode.replaceChild(newBtn, el.createProjectBtn);
+    el.createProjectBtn = newBtn;
+    el.createProjectBtn.addEventListener("click", async () => {
+      const id = el.newProjectId.value.trim();
+      const name = el.newProjectName.value.trim();
+      const path = el.newProjectArtifactPath.value.trim();
+      if (!id || !name || !path) return alert("All fields are required");
+      el.createProjectStatus.textContent = "Creating...";
+      el.createProjectStatus.style.color = "#adbac7";
+      try {
+        await fetchJson("/api/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id, name, artifact_path: path })
+        });
+        el.createProjectStatus.textContent = "Project created successfully!";
+        el.createProjectStatus.style.color = "#2da44e";
+        el.newProjectId.value = "";
+        el.newProjectName.value = "";
+        el.newProjectArtifactPath.value = "";
+        await initializeProjects();
+        renderProjectSettings();
+      } catch (err) {
+        el.createProjectStatus.textContent = `Error: ${err.message || err}`;
+        el.createProjectStatus.style.color = "#cf222e";
+      }
+    });
   }
 }
 

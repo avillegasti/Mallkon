@@ -543,7 +543,7 @@
               
               <div>
                 <h3 style="font-size: 14px; color: #adbac7; font-weight: 600; margin-bottom: 12px; border-bottom: 1px solid #444c56; padding-bottom: 6px;">Keycloak Client Connection</h3>
-                <div style="display: grid; grid-template-columns: 150px 1fr; gap: 8px; font-size: 13px; color: #adbac7;">
+                <div style="display: grid; grid-template-columns: 150px 1fr; gap: 8px; font-size: 13px; color: #adbac7; margin-bottom: 24px;">
                   <div style="color: #768390;">Issuer Authority:</div>
                   <div id="infoIssuer">-</div>
                   
@@ -552,6 +552,72 @@
                   
                   <div style="color: #768390;">Token Expiry:</div>
                   <div id="infoExpiry">-</div>
+                </div>
+              </div>
+              
+              <!-- Project Settings Section -->
+              <div id="projectSettingsSection" style="display: none;">
+                <h3 style="font-size: 14px; color: #adbac7; font-weight: 600; margin-bottom: 12px; border-bottom: 1px solid #444c56; padding-bottom: 6px;">Project Configuration</h3>
+                <p class="section-subtitle" style="margin-bottom: 12px; font-size: 13px; color: #768390;">Configure active project parameters.</p>
+                <div style="display: grid; grid-template-columns: 150px 1fr; gap: 8px; font-size: 13px; color: #adbac7; margin-bottom: 16px;">
+                  <div style="color: #768390;">Project ID:</div>
+                  <div id="projectConfigId">-</div>
+                  
+                  <div style="color: #768390;">Project Name:</div>
+                  <div id="projectConfigName">-</div>
+
+                  <div style="color: #768390;">Artifact Path:</div>
+                  <div id="projectConfigArtifactPath">-</div>
+                </div>
+                
+                <!-- Manage Members -->
+                <div style="margin-top: 16px; margin-bottom: 24px;">
+                  <h4 style="font-size: 13px; color: #adbac7; font-weight: 600; margin-bottom: 8px;">Project Members</h4>
+                  <table style="width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 12px;">
+                    <thead>
+                      <tr style="border-bottom: 1px solid #444c56; text-align: left; color: #768390;">
+                        <th style="padding: 6px 0;">User Sub</th>
+                        <th style="padding: 6px 0;">Role</th>
+                        <th style="padding: 6px 0; text-align: right;">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody id="projectMembersTableBody">
+                      <!-- Dynamically populated -->
+                    </tbody>
+                  </table>
+                  
+                  <div style="display: flex; gap: 8px; max-width: 450px; align-items: center;">
+                    <input id="newMemberSub" type="text" placeholder="User Sub ID" style="padding: 6px 12px; border-radius: 6px; border: 1px solid #444c56; background-color: #22272e; color: #adbac7; font-size: 13px; outline: none; flex: 1;">
+                    <select id="newMemberRole" style="padding: 6px 12px; border-radius: 6px; border: 1px solid #444c56; background-color: #22272e; color: #adbac7; font-size: 13px; outline: none; width: 100px;">
+                      <option value="viewer">Viewer</option>
+                      <option value="approver">Approver</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                    <button id="addMemberBtn" type="button" class="btn" style="background-color: #2da44e; color: white; border: none; padding: 6px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;">Add Member</button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- Create Project Section (Global Admin Only) -->
+              <div id="globalAdminSection" style="display: none;">
+                <h3 style="font-size: 14px; color: #adbac7; font-weight: 600; margin-bottom: 12px; border-bottom: 1px solid #444c56; padding-bottom: 6px;">Create New Project</h3>
+                <div style="display: flex; flex-direction: column; gap: 10px; max-width: 450px; margin-bottom: 24px;">
+                  <label style="font-size: 13px; color: #768390; display: flex; flex-direction: column; gap: 6px;">
+                    <span>Project ID (lowercase, alphanumeric, and hyphens only):</span>
+                    <input id="newProjectId" type="text" placeholder="e.g. project-a" style="padding: 6px 12px; border-radius: 6px; border: 1px solid #444c56; background-color: #22272e; color: #adbac7; font-size: 13px; outline: none;">
+                  </label>
+                  <label style="font-size: 13px; color: #768390; display: flex; flex-direction: column; gap: 6px;">
+                    <span>Project Name:</span>
+                    <input id="newProjectName" type="text" placeholder="e.g. Project A" style="padding: 6px 12px; border-radius: 6px; border: 1px solid #444c56; background-color: #22272e; color: #adbac7; font-size: 13px; outline: none;">
+                  </label>
+                  <label style="font-size: 13px; color: #768390; display: flex; flex-direction: column; gap: 6px;">
+                    <span>Artifact Storage Path (server directory):</span>
+                    <input id="newProjectArtifactPath" type="text" placeholder="e.g. /artifacts/projects/project-a" style="padding: 6px 12px; border-radius: 6px; border: 1px solid #444c56; background-color: #22272e; color: #adbac7; font-size: 13px; outline: none;">
+                  </label>
+                  <div style="display: flex; align-items: center; gap: 12px;">
+                    <button id="createProjectBtn" type="button" class="btn" style="background-color: #2da44e; color: white; border: none; padding: 6px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;">Create Project</button>
+                    <span id="createProjectStatus" style="font-size: 13px; font-weight: 500;"></span>
+                  </div>
                 </div>
               </div>
             </div>
