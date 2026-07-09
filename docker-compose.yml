@@ -5,10 +5,18 @@ services:
       dockerfile: Dockerfile.api
     image: northfi-release-portal-api:local
     container_name: northfi-release-portal-api
+    depends_on:
+      - keycloak
     environment:
       PORTAL_DB_PATH: /data/portal.db
+      KEYCLOAK_ISSUER: http://keycloak:8080/realms/northfi
+      KEYCLOAK_AUDIENCE: release-dashboard
+      ARTIFACT_ROOT: /artifacts
+      DASHBOARD_DATA_DIR: /artifacts/dashboard
     volumes:
       - ${DASHBOARD_STATE_DIR:-./state}:/data
+      - ${YOCTO_ARTIFACT_ROOT:-/data/yocto/artifacts}:/artifacts
+      - ./backend/indexer:/app/scripts:ro
     restart: unless-stopped
 
   dashboard-indexer:
@@ -22,10 +30,26 @@ services:
       DASHBOARD_INDEX_INTERVAL_SECONDS: ${DASHBOARD_INDEX_INTERVAL_SECONDS:-300}
     volumes:
       - ${YOCTO_ARTIFACT_ROOT:-/data/yocto/artifacts}:/artifacts
-      - ./scripts:/app/scripts:ro
+      - ./backend/indexer:/app/scripts:ro
     entrypoint: ["/bin/sh", "-lc"]
     command:
       - 'while true; do python3 /app/scripts/rebuild-index.py; sleep "${DASHBOARD_INDEX_INTERVAL_SECONDS:-300}"; done'
+    restart: unless-stopped
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: northfi-release-keycloak
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_DB: dev-file
+      KC_HTTP_ENABLED: "true"
+    command: ["start-dev", "--import-realm"]
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./state/keycloak:/opt/keycloak/data
+      - ./backend/keycloak-realm.json:/opt/keycloak/data/import/realm.json:ro
     restart: unless-stopped
 
   release-dashboard:

@@ -1,0 +1,86 @@
+{
+  "realm": "northfi",
+  "enabled": true,
+  "sslRequired": "NONE",
+  "registrationAllowed": false,
+  "rememberMe": false,
+  "users": [
+    {
+      "username": "dashboard-user",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "password",
+          "temporary": false
+        }
+      ],
+      "email": "dashboard-user@example.com"
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "release-dashboard",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "redirectUris": [
+        "*"
+      ],
+      "webOrigins": [
+        "*"
+      ],
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      }
+    }
+  ],
+  "identityProviders": [
+    {
+      "alias": "github",
+      "displayName": "GitHub",
+      "providerId": "github",
+      "enabled": true,
+      "trustEmail": true,
+      "config": {
+        "clientId": "placeholder-client-id",
+        "clientSecret": "placeholder-client-secret"
+      }
+    },
+    {
+      "alias": "google",
+      "displayName": "Google",
+      "providerId": "google",
+      "enabled": true,
+      "trustEmail": true,
+      "config": {
+        "clientId": "placeholder-client-id",
+        "clientSecret": "placeholder-client-secret"
+      }
+    },
+    {
+      "alias": "microsoft",
+      "displayName": "Microsoft",
+      "providerId": "microsoft",
+      "enabled": true,
+      "trustEmail": true,
+      "config": {
+        "clientId": "placeholder-client-id",
+        "clientSecret": "placeholder-client-secret",
+        "tenantId": "common"
+      }
+    }
+  ],
+  "roles": {
+    "realm": [
+      {
+        "name": "user"
+      }
+    ]
+  }
+}
