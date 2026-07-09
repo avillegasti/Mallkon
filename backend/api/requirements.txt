@@ -3,3 +3,4 @@ uvicorn
 pydantic
 requests
 python-jose[cryptography]
+psycopg2-binary==2.9.9
