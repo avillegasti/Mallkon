@@ -692,15 +692,6 @@ def index_entry(detail: dict, relative_dir: str, cve: dict | None = None) -> dic
     }
 
 
-def metadata_archives() -> list[Path]:
-    archives: list[Path] = []
-    for channel in ("releases", "development"):
-        root = ARTIFACT_ROOT / channel
-        if root.is_dir():
-            archives.extend(sorted(root.rglob("yocto-metadata-*.tar.gz")))
-    return archives
-
-
 def write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -722,10 +713,38 @@ def write_index(path: Path, entries: list[dict]) -> None:
     Path(temp_name).replace(path)
 
 
+def metadata_archives() -> list[tuple[str, Path]]:
+    archives: list[tuple[str, Path]] = []
+    
+    # 1. Check for project-specific subdirectories: ARTIFACT_ROOT / "projects" / <project_id> / {releases,development}
+    projects_dir = ARTIFACT_ROOT / "projects"
+    if projects_dir.is_dir():
+        for proj_dir in projects_dir.iterdir():
+            if proj_dir.is_dir():
+                project_id = proj_dir.name
+                for channel in ("releases", "development"):
+                    root = proj_dir / channel
+                    if root.is_dir():
+                        for path in sorted(root.rglob("yocto-metadata-*.tar.gz")):
+                            archives.append((project_id, path))
+                            
+    # 2. Fallback / legacy support: ARTIFACT_ROOT / {releases,development} (associated with 'default' project)
+    for channel in ("releases", "development"):
+        root = ARTIFACT_ROOT / channel
+        if root.is_dir():
+            for path in sorted(root.rglob("yocto-metadata-*.tar.gz")):
+                # Ensure we don't index the same archive twice if it falls under projects/ default folder
+                if "projects/" not in str(path):
+                    archives.append(("default", path))
+                    
+    return archives
+
+
 def rebuild() -> None:
-    entries = []
-    grouped_entries = {"releases": [], "development": []}
-    for archive_path in metadata_archives():
+    # Group entries by project
+    project_entries = {}
+    
+    for project_id, archive_path in metadata_archives():
         try:
             with tarfile.open(archive_path, "r:gz") as archive:
                 manifest = read_json_member(archive, "build-manifest.json")
@@ -740,8 +759,11 @@ def rebuild() -> None:
                 channel = detail.get("channel", "development")
                 group = storage_group(channel)
                 source_id = safe_id(archive_path.parent.name)
-                relative_dir = f"{group}/{source_id}"
+                
+                # Output paths are now project-scoped: projects/<project_id>/<group>/<source_id>
+                relative_dir = f"projects/{project_id}/{group}/{source_id}"
                 output_dir = DASHBOARD_DATA_DIR / relative_dir
+                
                 sbom = sbom_manifest_from_archive(archive, detail, manifest, packages, artifact_label, relative_dir, output_dir, archive_path)
                 detail["metadata"]["sbom_manifest"] = "sbom-manifest.json"
                 detail["sbom"] = sbom
@@ -754,26 +776,43 @@ def rebuild() -> None:
         write_json(output_dir / "package-manifest.json", packages)
         write_json(output_dir / "cve-summary.json", normalized_cve)
         write_json(output_dir / "sbom-manifest.json", detail["sbom"])
+        
         entry = index_entry(detail, relative_dir, normalized_cve)
-        entries.append(entry)
-        grouped_entries[group].append(entry)
+        
+        if project_id not in project_entries:
+            project_entries[project_id] = []
+        project_entries[project_id].append(entry)
 
-    sort_key = lambda item: item.get("generated_at_utc") or item.get("cached_at_utc") or ""
-    entries.sort(key=sort_key, reverse=True)
-    link_release_origins(entries)
-    grouped_entries = {"releases": [], "development": []}
-    for entry in entries:
-        grouped_entries[storage_group(entry.get("channel", "development"))].append(entry)
-    for group_entries in grouped_entries.values():
-        group_entries.sort(key=sort_key, reverse=True)
+    # For each project, generate its index files
+    for project_id, entries in project_entries.items():
+        sort_key = lambda item: item.get("generated_at_utc") or item.get("cached_at_utc") or ""
+        entries.sort(key=sort_key, reverse=True)
+        link_release_origins(entries)
+        
+        grouped_entries = {"releases": [], "development": []}
+        for entry in entries:
+            # Re-extract channel group from relative path or entry
+            channel = entry.get("channel", "development")
+            grouped_entries[storage_group(channel)].append(entry)
+            
+        for group_entries in grouped_entries.values():
+            group_entries.sort(key=sort_key, reverse=True)
 
-    write_index(DASHBOARD_DATA_DIR / "releases" / "index.json", grouped_entries["releases"])
-    write_index(DASHBOARD_DATA_DIR / "development" / "index.json", grouped_entries["development"])
-    write_index(DASHBOARD_DATA_DIR / "releases-index.json", entries)
-    print(
-        f"Indexed {len(grouped_entries['releases'])} release builds and "
-        f"{len(grouped_entries['development'])} development builds into {DASHBOARD_DATA_DIR}"
-    )
+        project_dir = DASHBOARD_DATA_DIR / "projects" / project_id
+        write_index(project_dir / "releases" / "index.json", grouped_entries["releases"])
+        write_index(project_dir / "development" / "index.json", grouped_entries["development"])
+        write_index(project_dir / "releases-index.json", entries)
+        
+        # Legacy compatibility for 'default' project at root
+        if project_id == "default":
+            write_index(DASHBOARD_DATA_DIR / "releases" / "index.json", grouped_entries["releases"])
+            write_index(DASHBOARD_DATA_DIR / "development" / "index.json", grouped_entries["development"])
+            write_index(DASHBOARD_DATA_DIR / "releases-index.json", entries)
+            
+        print(
+            f"Indexed project '{project_id}': {len(grouped_entries['releases'])} release builds and "
+            f"{len(grouped_entries['development'])} development builds into {project_dir}"
+        )
 
 
 if __name__ == "__main__":
