@@ -105,8 +105,26 @@ def init_db() -> None:
             with db() as conn:
                 conn.executescript(
                     """
+                    CREATE TABLE IF NOT EXISTS projects (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        description TEXT NOT NULL DEFAULT '',
+                        artifact_path TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        created_by TEXT NOT NULL
+                    );
+
+                    CREATE TABLE IF NOT EXISTS user_projects (
+                        user_sub TEXT NOT NULL,
+                        project_id TEXT NOT NULL,
+                        role TEXT NOT NULL DEFAULT 'viewer',
+                        PRIMARY KEY (user_sub, project_id),
+                        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+                    );
+
                     CREATE TABLE IF NOT EXISTS release_decisions (
                         release_key TEXT PRIMARY KEY,
+                        project_id TEXT NOT NULL DEFAULT 'default',
                         tag TEXT NOT NULL DEFAULT '',
                         build TEXT NOT NULL DEFAULT '',
                         machine TEXT NOT NULL DEFAULT '',
@@ -119,7 +137,8 @@ def init_db() -> None:
                         last_reviewed_at TEXT NOT NULL DEFAULT '',
                         updated_by TEXT NOT NULL DEFAULT '',
                         created_at TEXT NOT NULL,
-                        updated_at TEXT NOT NULL
+                        updated_at TEXT NOT NULL,
+                        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
                     );
 
                     CREATE TABLE IF NOT EXISTS release_checklist_items (
@@ -137,12 +156,14 @@ def init_db() -> None:
                     CREATE TABLE IF NOT EXISTS release_audit_log (
                         id SERIAL PRIMARY KEY,
                         release_key TEXT NOT NULL,
+                        project_id TEXT NOT NULL DEFAULT 'default',
                         actor TEXT NOT NULL DEFAULT '',
                         action TEXT NOT NULL,
                         field TEXT NOT NULL DEFAULT '',
                         old_value TEXT NOT NULL DEFAULT '',
                         new_value TEXT NOT NULL DEFAULT '',
-                        created_at TEXT NOT NULL
+                        created_at TEXT NOT NULL,
+                        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
                     );
 
                     CREATE TABLE IF NOT EXISTS user_profiles (
@@ -150,6 +171,16 @@ def init_db() -> None:
                         jira_token TEXT NOT NULL DEFAULT ''
                     );
                     """
+                )
+                
+                # Auto-create the default project if it doesn't exist
+                conn.execute(
+                    """
+                    INSERT INTO projects (id, name, description, artifact_path, created_at, created_by)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT(id) DO NOTHING
+                    """,
+                    ("default", "Default Project", "Auto-generated default project", "/artifacts", utcnow(), "system")
                 )
             break
         except psycopg2.OperationalError as exc:
@@ -179,6 +210,40 @@ class ReviewUpdate(BaseModel):
     jira: str = ""
     note: str = ""
     checks: dict[str, bool] = Field(default_factory=dict)
+
+
+class ProjectCreate(BaseModel):
+    id: str = Field(..., pattern=r"^[a-z0-9\-]+$")
+    name: str
+    description: str = ""
+    artifact_path: str
+
+
+class ProjectMemberAdd(BaseModel):
+    user_sub: str
+    role: str = "viewer"
+
+
+def verify_project_access(required_roles: list[str] = None):
+    def dependency(project_id: str, current_user: dict[str, Any] = Depends(get_current_user)):
+        user_roles = current_user.get("roles", [])
+        if "admin" in user_roles:
+            return project_id
+
+        with db() as conn:
+            row = conn.execute(
+                "SELECT role FROM user_projects WHERE user_sub = ? AND project_id = ?",
+                (current_user["sub"], project_id),
+            ).fetchone()
+            if not row:
+                raise HTTPException(status_code=403, detail="Access denied to this project")
+
+            user_project_role = row["role"]
+            if required_roles and user_project_role not in required_roles:
+                raise HTTPException(status_code=403, detail="Insufficient permission in this project")
+
+        return project_id
+    return dependency
 
 
 def clean_status(status: str) -> str:
@@ -320,29 +385,34 @@ def get_current_user(authorization: str | None = Header(default=None)) -> dict[s
     }
 
 
-def audit(conn: sqlite3.Connection, release_key: str, actor: str, action: str, field: str = "", old: Any = "", new: Any = "") -> None:
+def audit(conn: DbConnectionWrapper, release_key: str, project_id: str, actor: str, action: str, field: str = "", old: Any = "", new: Any = "") -> None:
     conn.execute(
-        "INSERT INTO release_audit_log (release_key, actor, action, field, old_value, new_value, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (release_key, actor, action, field, "" if old is None else str(old), "" if new is None else str(new), utcnow()),
+        "INSERT INTO release_audit_log (release_key, project_id, actor, action, field, old_value, new_value, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (release_key, project_id, actor, action, field, "" if old is None else str(old), "" if new is None else str(new), utcnow()),
     )
 
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "db_path": DB_PATH}
+    return {"status": "ok", "db": "postgresql"}
 
 
 @app.get("/api/reviews")
-def list_reviews(status: str | None = None, current_user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+def list_reviews(
+    project_id: str = "default",
+    status: str | None = None,
+    current_user: dict[str, Any] = Depends(get_current_user)
+) -> dict[str, Any]:
+    verify_project_access()(project_id, current_user)
     with db() as conn:
-        params: tuple[Any, ...] = ()
-        where = ""
+        params = [project_id]
+        where = "WHERE project_id = ?"
         if status:
-            where = "WHERE status = ?"
-            params = (status,)
+            where += " AND status = ?"
+            params.append(status)
         rows = conn.execute(
             f"SELECT * FROM release_decisions {where} ORDER BY updated_at DESC, created_at DESC",
-            params,
+            tuple(params),
         ).fetchall()
         return {"reviews": [row_to_decision(row, row["release_key"]) for row in rows]}
 
@@ -350,6 +420,7 @@ def list_reviews(status: str | None = None, current_user: dict[str, Any] = Depen
 @app.get("/api/reviews/{release_key}")
 def get_review(
     release_key: str,
+    project_id: str = Query(default="default"),
     tag: str = Query(default=""),
     build: str = Query(default=""),
     machine: str = Query(default=""),
@@ -357,13 +428,20 @@ def get_review(
     commit: str = Query(default=""),
     current_user: dict[str, Any] = Depends(get_current_user),
 ) -> dict[str, Any]:
+    verify_project_access()(project_id, current_user)
     metadata = {"tag": tag, "build": build, "machine": machine, "manifest": manifest, "commit": commit}
     with db() as conn:
         return get_review_payload(conn, release_key, metadata)
 
 
 @app.put("/api/reviews/{release_key}")
-def put_review(release_key: str, payload: ReviewUpdate, current_user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+def put_review(
+    release_key: str,
+    payload: ReviewUpdate,
+    project_id: str = Query(default="default"),
+    current_user: dict[str, Any] = Depends(get_current_user)
+) -> dict[str, Any]:
+    verify_project_access(["admin", "approver"])(project_id, current_user)
     user_roles = current_user.get("roles", [])
     if "admin" not in user_roles and "approver" not in user_roles:
         raise HTTPException(status_code=403, detail="Permission denied: Only admin or approver roles can modify release reviews")
@@ -380,16 +458,16 @@ def put_review(release_key: str, payload: ReviewUpdate, current_user: dict[str, 
             conn.execute(
                 """
                 INSERT INTO release_decisions (
-                    release_key, tag, build, machine, manifest, commit_sha, status, owner, jira_url,
+                    release_key, project_id, tag, build, machine, manifest, commit_sha, status, owner, jira_url,
                     decision_note, last_reviewed_at, updated_by, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    release_key, release.tag, release.build, release.machine, release.manifest, release.commit,
+                    release_key, project_id, release.tag, release.build, release.machine, release.manifest, release.commit,
                     status, payload.owner, payload.jira, payload.note, now, actor, now, now,
                 ),
             )
-            audit(conn, release_key, actor, "create_review", "status", "", status)
+            audit(conn, release_key, project_id, actor, "create_review", "status", "", status)
         else:
             fields = {
                 "status": status,
@@ -400,7 +478,7 @@ def put_review(release_key: str, payload: ReviewUpdate, current_user: dict[str, 
             for field, new_value in fields.items():
                 old_value = old_payload.get(field, "") if old_payload else ""
                 if str(old_value or "") != str(new_value or ""):
-                    audit(conn, release_key, actor, "update_decision", field, old_value, new_value)
+                    audit(conn, release_key, project_id, actor, "update_decision", field, old_value, new_value)
             conn.execute(
                 """
                 UPDATE release_decisions
@@ -428,7 +506,7 @@ def put_review(release_key: str, payload: ReviewUpdate, current_user: dict[str, 
             checked_by = previous["checked_by"] if previous else ""
             checked_at = previous["checked_at"] if previous else ""
             if previous_checked != bool(checked):
-                audit(conn, release_key, actor, "update_checklist", item_key, previous_checked, bool(checked))
+                audit(conn, release_key, project_id, actor, "update_checklist", item_key, previous_checked, bool(checked))
                 checked_by = actor if checked else ""
                 checked_at = now if checked else ""
             conn.execute(
@@ -448,11 +526,16 @@ def put_review(release_key: str, payload: ReviewUpdate, current_user: dict[str, 
 
 
 @app.get("/api/reviews/{release_key}/audit")
-def get_audit(release_key: str, current_user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+def get_audit(
+    release_key: str,
+    project_id: str = Query(default="default"),
+    current_user: dict[str, Any] = Depends(get_current_user)
+) -> dict[str, Any]:
+    verify_project_access()(project_id, current_user)
     with db() as conn:
         rows = conn.execute(
-            "SELECT * FROM release_audit_log WHERE release_key = ? ORDER BY id DESC LIMIT 200",
-            (release_key,),
+            "SELECT * FROM release_audit_log WHERE release_key = ? AND project_id = ? ORDER BY id DESC LIMIT 200",
+            (release_key, project_id),
         ).fetchall()
         return {
             "events": [
@@ -588,5 +671,89 @@ def put_profile(payload: ProfileUpdate, current_user: dict[str, Any] = Depends(g
             (current_user["sub"], payload.jira_token),
         )
         return {"status": "ok", "jira_token": payload.jira_token}
+
+
+@app.get("/api/projects")
+def list_projects(current_user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    user_roles = current_user.get("roles", [])
+    user_sub = current_user["sub"]
+    with db() as conn:
+        if "admin" in user_roles:
+            rows = conn.execute("SELECT * FROM projects ORDER BY name ASC").fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT p.* FROM projects p
+                JOIN user_projects up ON p.id = up.project_id
+                WHERE up.user_sub = ?
+                ORDER BY p.name ASC
+                """,
+                (user_sub,),
+            ).fetchall()
+        return {"projects": [dict(row) for row in rows]}
+
+
+@app.post("/api/projects")
+def create_project(payload: ProjectCreate, current_user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    user_roles = current_user.get("roles", [])
+    if "admin" not in user_roles:
+        raise HTTPException(status_code=403, detail="Only global admin can create new projects")
+    
+    now = utcnow()
+    with db() as conn:
+        exists = conn.execute("SELECT 1 FROM projects WHERE id = ?", (payload.id,)).fetchone()
+        if exists:
+            raise HTTPException(status_code=400, detail="Project ID already exists")
+        
+        conn.execute(
+            """
+            INSERT INTO projects (id, name, description, artifact_path, created_at, created_by)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (payload.id, payload.name, payload.description, payload.artifact_path, now, current_user["username"]),
+        )
+        # Auto-assign the creator as admin of the project
+        conn.execute(
+            """
+            INSERT INTO user_projects (user_sub, project_id, role)
+            VALUES (?, ?, ?)
+            """,
+            (current_user["sub"], payload.id, "admin"),
+        )
+        return {"status": "ok", "project_id": payload.id}
+
+
+@app.get("/api/projects/{project_id}/members")
+def list_project_members(project_id: str = Depends(verify_project_access(["admin", "approver"]))) -> dict[str, Any]:
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT user_sub, role FROM user_projects WHERE project_id = ?",
+            (project_id,),
+        ).fetchall()
+        return {"members": [dict(row) for row in rows]}
+
+
+@app.post("/api/projects/{project_id}/members")
+def add_project_member(payload: ProjectMemberAdd, project_id: str = Depends(verify_project_access(["admin"]))) -> dict[str, Any]:
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_projects (user_sub, project_id, role)
+            VALUES (?, ?, ?)
+            ON CONFLICT (user_sub, project_id) DO UPDATE SET role = excluded.role
+            """,
+            (payload.user_sub, project_id, payload.role),
+        )
+        return {"status": "ok"}
+
+
+@app.delete("/api/projects/{project_id}/members/{user_sub}")
+def remove_project_member(user_sub: str, project_id: str = Depends(verify_project_access(["admin"]))) -> dict[str, Any]:
+    with db() as conn:
+        conn.execute(
+            "DELETE FROM user_projects WHERE user_sub = ? AND project_id = ?",
+            (user_sub, project_id),
+        )
+        return {"status": "ok"}
 
 
