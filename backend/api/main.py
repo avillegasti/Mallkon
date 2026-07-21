@@ -786,14 +786,17 @@ def get_keycloak_admin_token() -> str | None:
 
 @app.get("/api/users")
 def list_available_users(current_user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+    print("DEBUG API USERS: Called list_available_users", flush=True)
     token = get_keycloak_admin_token()
     if not token:
+        print("DEBUG API USERS: No keycloak admin token obtained", flush=True)
         return {"users": []}
     
     try:
         base_url = KEYCLOAK_ISSUER.split("/realms/")[0]
         users_url = f"{base_url}/admin/realms/northfi/users"
         res = requests.get(users_url, headers={"Authorization": f"Bearer {token}"}, timeout=5)
+        print(f"DEBUG API USERS: Keycloak response code = {res.status_code}", flush=True)
         if res.status_code == 200:
             users = []
             for u in res.json():
@@ -810,9 +813,12 @@ def list_available_users(current_user: dict[str, Any] = Depends(get_current_user
                     "label": label
                 })
             users.sort(key=lambda x: x["username"].lower())
+            print(f"DEBUG API USERS: Found users = {[u['username'] for u in users]}", flush=True)
             return {"users": users}
+        else:
+            print(f"DEBUG API USERS: Keycloak error response = {res.text}", flush=True)
     except Exception as e:
-        print(f"Failed to fetch users from Keycloak: {e}")
+        print(f"Failed to fetch users from Keycloak: {e}", flush=True)
         
     return {"users": []}
 
