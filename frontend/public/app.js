@@ -352,7 +352,7 @@ async function renderProjectSettings() {
       const id = el.newProjectId.value.trim();
       const name = el.newProjectName.value.trim();
       const path = el.newProjectArtifactPath.value.trim();
-      if (!id || !name || !path) return alert("All fields are required");
+      if (!id || !name || !path) return showToast("All fields are required", "error");
 
       const idPattern = /^[a-z0-9\-]+$/;
       if (!idPattern.test(id)) {
@@ -458,16 +458,23 @@ async function renderProjectSettings() {
 
         // Bind delete events
         el.projectMembersTableBody.querySelectorAll(".delete-member-btn").forEach(btn => {
-          btn.addEventListener("click", async () => {
+          btn.addEventListener("click", () => {
             const sub = btn.dataset.sub;
-            if (confirm(`Are you sure you want to remove member ${sub}?`)) {
-              try {
-                await fetchJson(`/api/projects/${encodeURIComponent(state.activeProjectId)}/members/${encodeURIComponent(sub)}`, { method: "DELETE" });
-                renderProjectSettings();
-              } catch (err) {
-                alert(`Error removing member: ${err.message || err}`);
+            const userDetails = userMap.get(sub);
+            const username = userDetails ? userDetails.username : sub;
+            showConfirm(
+              "Remove Project Member",
+              `Are you sure you want to remove member "${username}" from the project?`,
+              async () => {
+                try {
+                  await fetchJson(`/api/projects/${encodeURIComponent(state.activeProjectId)}/members/${encodeURIComponent(sub)}`, { method: "DELETE" });
+                  showToast("Member successfully removed");
+                  renderProjectSettings();
+                } catch (err) {
+                  showToast(`Error removing member: ${err.message || err}`, "error");
+                }
               }
-            }
+            );
           });
         });
       }
@@ -494,7 +501,7 @@ async function renderProjectSettings() {
       el.addMemberBtn.addEventListener("click", async () => {
         const sub = el.newMemberSub.value.trim();
         const role = el.newMemberRole.value;
-        if (!sub) return alert("Please select a user to add");
+        if (!sub) return showToast("Please select a user to add", "error");
         try {
           await fetchJson(`/api/projects/${encodeURIComponent(state.activeProjectId)}/members`, {
             method: "POST",
@@ -502,9 +509,10 @@ async function renderProjectSettings() {
             body: JSON.stringify({ user_sub: sub, role })
           });
           el.newMemberSub.value = "";
+          showToast("Member successfully added");
           renderProjectSettings();
         } catch (err) {
-          alert(`Error adding member: ${err.message || err}`);
+          showToast(`Error adding member: ${err.message || err}`, "error");
         }
       });
     }
@@ -858,7 +866,7 @@ function setActiveView(view) {
     const roles = currentUserRoles();
     const isAdmin = roles.includes("admin");
     if (!isAdmin) {
-      alert("Access Denied: Only global administrators can create projects.");
+      showToast("Access Denied: Only global administrators can create projects.", "error");
       state.activeView = "projects";
       state.activeProjectTab = "list";
     } else {
@@ -4966,6 +4974,74 @@ async function initializeProjects() {
       setActiveView("projects-create");
     });
   }
+}
+function showToast(message, type = "success") {
+  let container = document.querySelector(".toast-container");
+  if (!container) {
+    container = document.createElement("div");
+    container.className = "toast-container";
+    document.body.appendChild(container);
+  }
+
+  const toast = document.createElement("div");
+  toast.className = `toast-notification ${type}`;
+
+  let iconSvg = "";
+  if (type === "success") {
+    iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+  } else if (type === "error") {
+    iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`;
+  } else {
+    iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>`;
+  }
+
+  toast.innerHTML = `
+    <span class="toast-icon">${iconSvg}</span>
+    <span>${escapeHtml(message)}</span>
+  `;
+
+  container.appendChild(toast);
+  setTimeout(() => {
+    toast.remove();
+    if (container.children.length === 0) {
+      container.remove();
+    }
+  }, 3000);
+}
+
+function showConfirm(title, message, onConfirm) {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+
+  overlay.innerHTML = `
+    <div class="confirm-modal-card">
+      <h3>${escapeHtml(title)}</h3>
+      <p>${escapeHtml(message)}</p>
+      <div class="confirm-modal-actions">
+        <button type="button" class="btn-cancel">Cancel</button>
+        <button type="button" class="btn-confirm">Confirm</button>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+
+  const cancelBtn = overlay.querySelector(".btn-cancel");
+  const confirmBtn = overlay.querySelector(".btn-confirm");
+
+  const closeModal = () => {
+    overlay.remove();
+  };
+
+  cancelBtn.addEventListener("click", closeModal);
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closeModal();
+  });
+
+  confirmBtn.addEventListener("click", () => {
+    closeModal();
+    onConfirm();
+  });
 }
 
 syncViewTabs();
