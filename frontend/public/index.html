@@ -29,6 +29,12 @@
       </div>
     </div>
     <div class="sidebar-nav">
+      <!-- Current Project Info -->
+      <div id="sidebarCurrentProject" style="padding: 14px 20px 10px 20px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); margin-bottom: 8px; display: none;">
+        <span style="font-size: 10px; color: #768390; text-transform: uppercase; font-weight: 600; letter-spacing: 0.5px;">Current Project</span>
+        <div id="sidebarCurrentProjectName" style="color: #fff; font-size: 14px; font-weight: 600; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">-</div>
+      </div>
+
       <!-- Dashboard Link -->
       <a href="#" id="sidebarDashboardLink" class="nav-link view-tab active" data-view="overview">
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
@@ -56,9 +62,13 @@
             <polyline points="6 9 12 15 18 9"></polyline>
           </svg>
         </summary>
-        <div class="nav-group-items" id="sidebarProjectsList">
-          <!-- Dynamically populated project links -->
-          <div style="padding: 6px 12px; color: #768390; font-size: 13px;">Loading...</div>
+        <div class="nav-group-items">
+          <a href="#" id="sidebarAllProjectsLink" class="nav-sub-link view-tab" data-view="projects-list" style="display: block; text-decoration: none; padding: 6px 12px; border-radius: 4px; color: #adbac7; font-size: 13px; margin-bottom: 2px;">
+            All Projects
+          </a>
+          <a href="#" id="sidebarCreateProjectLink" class="nav-sub-link view-tab" data-view="projects-create" style="display: none; text-decoration: none; padding: 6px 12px; border-radius: 4px; color: #adbac7; font-size: 13px; margin-bottom: 2px;">
+            + Create Project
+          </a>
         </div>
       </details>
 
@@ -582,7 +592,6 @@
             <div class="sub-tabs-container" style="display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid #444c56; padding-bottom: 8px;">
               <button class="project-sub-tab active" data-tab="list" style="background: none; border: none; color: #fff; font-size: 13px; font-weight: 600; padding: 6px 16px; border-radius: 6px; cursor: pointer; transition: background-color 0.2s;">All Projects</button>
               <button class="project-sub-tab" data-tab="config" style="background: none; border: none; color: #768390; font-size: 13px; font-weight: 500; padding: 6px 16px; border-radius: 6px; cursor: pointer; transition: background-color 0.2s;">Project Settings</button>
-              <button id="subTabCreateProject" class="project-sub-tab" data-tab="create" style="display: none; background: none; border: none; color: #768390; font-size: 13px; font-weight: 500; padding: 6px 16px; border-radius: 6px; cursor: pointer; transition: background-color 0.2s;">+ Create Project</button>
             </div>
             
             <div style="display: flex; flex-direction: column; gap: 24px;">
@@ -679,7 +688,7 @@
     </main>
   </div>
 
-  <script type="module" src="app.js?v=20260702-modules"></script>
+  <script type="module" src="app.js?v=20260709-v12"></script>
 </body>
 
 </html>

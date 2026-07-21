@@ -280,15 +280,7 @@ function renderProjectsListTable() {
       window.localStorage.setItem("activeProjectId", projId);
       
       // Update sidebar projects active state
-      if (el.sidebarProjectsList) {
-        el.sidebarProjectsList.querySelectorAll(".project-link").forEach(l => {
-          const isActive = l.dataset.projectId === projId;
-          l.classList.toggle("active", isActive);
-          l.style.color = isActive ? '#fff' : '#adbac7';
-          l.style.backgroundColor = isActive ? '#2d333b' : 'transparent';
-        });
-      }
-      
+      initializeProjects();
       loadIndex();
       setActiveView("overview");
     });
@@ -301,16 +293,7 @@ function renderProjectsListTable() {
       state.activeProjectId = projId;
       window.localStorage.setItem("activeProjectId", projId);
 
-      // Update sidebar projects active state
-      if (el.sidebarProjectsList) {
-        el.sidebarProjectsList.querySelectorAll(".project-link").forEach(l => {
-          const isActive = l.dataset.projectId === projId;
-          l.classList.toggle("active", isActive);
-          l.style.color = isActive ? '#fff' : '#adbac7';
-          l.style.backgroundColor = isActive ? '#2d333b' : 'transparent';
-        });
-      }
-
+      initializeProjects();
       state.activeProjectTab = "config";
       renderProjectSettings();
     });
@@ -329,6 +312,12 @@ function switchProjectTab(tab) {
     btn.style.backgroundColor = active ? "#2d333b" : "transparent";
   });
 
+  // Hide the tabs container completely when in "create" view
+  const tabsContainer = document.querySelector(".sub-tabs-container");
+  if (tabsContainer) {
+    tabsContainer.style.display = tab === "create" ? "none" : "flex";
+  }
+
   // Toggle section visibility
   if (el.projectsListSection) el.projectsListSection.style.display = tab === "list" ? "block" : "none";
   if (el.projectSettingsSection) el.projectSettingsSection.style.display = tab === "config" ? "block" : "none";
@@ -337,13 +326,7 @@ function switchProjectTab(tab) {
 
 async function renderProjectSettings() {
   const roles = currentUserRoles();
-  const isAdmin = roles.includes("admin");
   
-  // Show/hide Create Project sub-tab based on global admin role
-  if (el.subTabCreateProject) {
-    el.subTabCreateProject.style.display = isAdmin ? "block" : "none";
-  }
-
   // Update visible tab view
   switchProjectTab(state.activeProjectTab);
 
@@ -823,6 +806,10 @@ function syncViewTabs() {
       active = (state.activeView === "releases" && state.activeChannel === "development");
     } else if (view === "releases") {
       active = (state.activeView === "releases" && state.activeChannel !== "development");
+    } else if (view === "projects-list") {
+      active = (state.activeView === "projects" && state.activeProjectTab === "list");
+    } else if (view === "projects-create") {
+      active = (state.activeView === "projects" && state.activeProjectTab === "create");
     } else {
       active = view === state.activeView;
     }
@@ -854,6 +841,20 @@ function setActiveView(view) {
     state.activeView = "releases";
     if (state.activeChannel === "development") {
       setActiveChannel("release");
+    }
+  } else if (view === "projects-list") {
+    state.activeView = "projects";
+    state.activeProjectTab = "list";
+  } else if (view === "projects-create") {
+    const roles = currentUserRoles();
+    const isAdmin = roles.includes("admin");
+    if (!isAdmin) {
+      alert("Access Denied: Only global administrators can create projects.");
+      state.activeView = "projects";
+      state.activeProjectTab = "list";
+    } else {
+      state.activeView = "projects";
+      state.activeProjectTab = "create";
     }
   } else {
     state.activeView = ["overview", "releases", "attention", "compare", "lineage", "information", "projects"].includes(view) ? view : "overview";
@@ -4872,6 +4873,10 @@ el.compareSwap.addEventListener("click", () => {
   renderCompare();
 });
 async function initializeProjects() {
+  const roles = currentUserRoles();
+  const isAdmin = roles.includes("admin");
+  console.log("DEBUG: initializeProjects roles =", roles, "isAdmin =", isAdmin);
+
   try {
     const data = await fetchJson("/api/projects");
     state.projects = Array.isArray(data.projects) ? data.projects : [];
@@ -4880,83 +4885,76 @@ async function initializeProjects() {
     state.projects = [];
   }
 
-  // Populate sidebar projects list
-  if (el.sidebarProjectsList) {
-    const hasProjects = state.projects.length > 0;
+  const hasProjects = state.projects.length > 0;
 
-    // Toggle disabled class on project-dependent sidebar nav components
-    if (el.sidebarDashboardLink) el.sidebarDashboardLink.classList.toggle("disabled", !hasProjects);
-    if (el.sidebarHardwareGroup) {
-      el.sidebarHardwareGroup.classList.toggle("disabled", !hasProjects);
-      if (!hasProjects) el.sidebarHardwareGroup.open = false;
-    }
-    if (el.sidebarSoftwareGroup) {
-      el.sidebarSoftwareGroup.classList.toggle("disabled", !hasProjects);
-      if (!hasProjects) el.sidebarSoftwareGroup.open = false;
+  // Toggle disabled class on project-dependent sidebar nav components
+  if (el.sidebarDashboardLink) el.sidebarDashboardLink.classList.toggle("disabled", !hasProjects);
+  if (el.sidebarHardwareGroup) {
+    el.sidebarHardwareGroup.classList.toggle("disabled", !hasProjects);
+    if (!hasProjects) el.sidebarHardwareGroup.open = false;
+  }
+  if (el.sidebarSoftwareGroup) {
+    el.sidebarSoftwareGroup.classList.toggle("disabled", !hasProjects);
+    if (!hasProjects) el.sidebarSoftwareGroup.open = false;
+  }
+
+  // Force redirection to projectsView if current active view requires a project but none exist
+  if (!hasProjects && ["overview", "releases", "development", "attention", "compare", "lineage"].includes(state.activeView)) {
+    setActiveView("projects");
+  }
+
+  const sidebarProj = document.getElementById("sidebarCurrentProject");
+  const sidebarProjName = document.getElementById("sidebarCurrentProjectName");
+
+  if (!hasProjects) {
+    if (sidebarProj) sidebarProj.style.display = "none";
+    state.activeProjectId = "";
+    window.localStorage.removeItem("activeProjectId");
+  } else {
+    // Determine active project
+    if (!state.projects.some(p => p.id === state.activeProjectId)) {
+      state.activeProjectId = state.projects[0].id;
+      window.localStorage.setItem("activeProjectId", state.activeProjectId);
     }
 
-    // Force redirection to projectsView if current active view requires a project but none exist
-    if (!hasProjects && ["overview", "releases", "development", "attention", "compare", "lineage"].includes(state.activeView)) {
-      setActiveView("projects");
-    }
+    const activeProj = state.projects.find(p => p.id === state.activeProjectId);
+    const activeProjName = activeProj ? activeProj.name : "None";
 
-    if (!hasProjects) {
-      let html = '<div style="padding: 6px 12px; color: #768390; font-size: 13px;">No projects</div>';
-      html += `
-        <a href="#" class="nav-sub-link manage-projects-sidebar-btn" style="border-top: 1px solid rgba(255,255,255,0.05); margin-top: 4px; padding-top: 6px; color: #539bf5; font-weight: 500; display: block; text-decoration: none; padding: 6px 12px;">Manage Projects</a>
-      `;
-      el.sidebarProjectsList.innerHTML = html;
-      state.activeProjectId = "";
-      window.localStorage.removeItem("activeProjectId");
+    if (sidebarProjName) {
+      sidebarProjName.textContent = activeProjName;
+    }
+    if (sidebarProj) {
+      sidebarProj.style.display = "block";
+    }
+  }
+
+  const createLink = document.getElementById("sidebarCreateProjectLink");
+  const allLink = document.getElementById("sidebarAllProjectsLink");
+  console.log("DEBUG: createLink =", createLink);
+
+  // Toggle create project sublink display based on global admin status
+  if (createLink) {
+    if (isAdmin) {
+      createLink.style.setProperty("display", "flex", "important");
     } else {
-      // Determine active project
-      if (!state.projects.some(p => p.id === state.activeProjectId)) {
-        state.activeProjectId = state.projects[0].id;
-        window.localStorage.setItem("activeProjectId", state.activeProjectId);
-      }
-
-      let html = state.projects.map((proj) => {
-        const isActive = proj.id === state.activeProjectId;
-        return `
-          <a href="#" class="nav-sub-link project-link${isActive ? ' active' : ''}" data-project-id="${escapeHtml(proj.id)}" style="display: block; text-decoration: none; padding: 6px 12px; border-radius: 4px; color: ${isActive ? '#fff' : '#adbac7'}; background-color: ${isActive ? '#2d333b' : 'transparent'}; margin-bottom: 2px;">
-            ${escapeHtml(proj.name)}
-          </a>
-        `;
-      }).join("");
-
-      html += `
-        <a href="#" class="nav-sub-link manage-projects-sidebar-btn" style="border-top: 1px solid rgba(255,255,255,0.05); margin-top: 6px; padding-top: 6px; color: #539bf5; font-weight: 500; display: block; text-decoration: none; padding: 6px 12px;">Manage Projects</a>
-      `;
-      el.sidebarProjectsList.innerHTML = html;
+      createLink.style.setProperty("display", "none", "important");
     }
+    console.log("DEBUG: after assignment createLink.style.display =", createLink.style.display);
+  }
 
-    // Bind project links
-    el.sidebarProjectsList.querySelectorAll(".project-link").forEach((link) => {
-      link.addEventListener("click", (e) => {
-        e.preventDefault();
-        const projId = link.dataset.projectId;
-        state.activeProjectId = projId;
-        window.localStorage.setItem("activeProjectId", state.activeProjectId);
-        
-        // Update active class immediately in UI
-        el.sidebarProjectsList.querySelectorAll(".project-link").forEach(l => {
-          const isActive = l.dataset.projectId === projId;
-          l.classList.toggle("active", isActive);
-          l.style.color = isActive ? '#fff' : '#adbac7';
-          l.style.backgroundColor = isActive ? '#2d333b' : 'transparent';
-        });
-
-        loadIndex();
-      });
+  // Bind sidebar projects sublinks click handlers
+  if (allLink && !allLink.dataset.bound) {
+    allLink.dataset.bound = "true";
+    allLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      setActiveView("projects-list");
     });
-
-    // Bind manage projects button
-    el.sidebarProjectsList.querySelectorAll(".manage-projects-sidebar-btn").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.preventDefault();
-        state.activeProjectTab = "list";
-        setActiveView("projects");
-      });
+  }
+  if (createLink && !createLink.dataset.bound) {
+    createLink.dataset.bound = "true";
+    createLink.addEventListener("click", (e) => {
+      e.preventDefault();
+      setActiveView("projects-create");
     });
   }
 }

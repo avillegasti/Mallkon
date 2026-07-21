@@ -682,6 +682,7 @@ def put_profile(payload: ProfileUpdate, current_user: dict[str, Any] = Depends(g
 def list_projects(current_user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
     user_roles = current_user.get("roles", [])
     user_sub = current_user["sub"]
+    print("DEBUG LIST_PROJECTS: User =", current_user.get("username"), "Roles =", user_roles, "Sub =", user_sub, flush=True)
     with db() as conn:
         if "admin" in user_roles:
             rows = conn.execute("SELECT * FROM projects ORDER BY name ASC").fetchall()
