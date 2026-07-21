@@ -326,6 +326,7 @@ function switchProjectTab(tab) {
 
 async function renderProjectSettings() {
   const roles = currentUserRoles();
+  const isAdmin = roles.includes("admin");
   
   // Update visible tab view
   switchProjectTab(state.activeProjectTab);
