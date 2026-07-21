@@ -1083,32 +1083,35 @@ body.torizon-theme {
   pointer-events: auto;
   min-width: 280px;
   max-width: 400px;
-  background-color: #22272e;
-  border-left: 4px solid #539bf5;
-  color: #adbac7;
+  background-color: #ffffff;
+  border-left: 4px solid var(--t-primary, #00508f);
+  color: var(--t-text, #24292f);
   padding: 12px 20px 12px 16px;
   border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
   display: flex;
   align-items: center;
   gap: 12px;
   font-size: 13px;
   font-weight: 500;
   animation: toastSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1), toastFadeOut 0.3s forwards 2.7s;
-  border: 1px solid rgba(68, 76, 86, 0.5);
+  border: 1px solid var(--t-border, #e2e8f0);
   border-left-width: 4px;
 }
 
 .toast-notification.success {
-  border-left-color: #2ea44f;
+  border-left-color: var(--t-success, #1a7f37);
+  color: var(--t-success, #1a7f37);
 }
 
 .toast-notification.error {
-  border-left-color: #cf222e;
+  border-left-color: var(--t-critical, #cf222e);
+  color: var(--t-critical, #cf222e);
 }
 
 .toast-notification.info {
-  border-left-color: #539bf5;
+  border-left-color: var(--t-primary, #00508f);
+  color: var(--t-primary, #00508f);
 }
 
 .toast-icon {
@@ -1149,7 +1152,7 @@ body.torizon-theme {
   left: 0;
   width: 100vw;
   height: 100vh;
-  background-color: rgba(0, 0, 0, 0.5);
+  background-color: rgba(15, 23, 42, 0.3);
   backdrop-filter: blur(4px);
   z-index: 9998;
   display: flex;
@@ -1161,29 +1164,29 @@ body.torizon-theme {
 .confirm-modal-card {
   width: 90%;
   max-width: 440px;
-  background-color: #22272e;
-  border: 1px solid #444c56;
+  background-color: var(--t-card-bg, #ffffff);
+  border: 1px solid var(--t-border, #e2e8f0);
   border-radius: 8px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-  padding: 20px;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+  padding: 24px;
   display: flex;
   flex-direction: column;
   gap: 16px;
   animation: modalScaleUp 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-  color: #adbac7;
+  color: var(--t-text, #24292f);
 }
 
 .confirm-modal-card h3 {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
-  color: #fff;
+  color: var(--t-text, #24292f);
 }
 
 .confirm-modal-card p {
   margin: 0;
   font-size: 13px;
-  color: #768390;
+  color: var(--t-muted, #57606a);
   line-height: 1.5;
 }
 
@@ -1191,10 +1194,11 @@ body.torizon-theme {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+  margin-top: 8px;
 }
 
 .confirm-modal-actions button {
-  padding: 6px 16px;
+  padding: 8px 18px;
   font-size: 13px;
   font-weight: 600;
   border-radius: 6px;
@@ -1204,17 +1208,16 @@ body.torizon-theme {
 
 .confirm-modal-actions .btn-cancel {
   background-color: transparent;
-  border: 1px solid #444c56;
-  color: #adbac7;
+  border: 1px solid var(--t-border, #e2e8f0);
+  color: var(--t-text, #24292f);
 }
 
 .confirm-modal-actions .btn-cancel:hover {
-  background-color: rgba(255, 255, 255, 0.05);
-  color: #fff;
+  background-color: rgba(0, 0, 0, 0.05);
 }
 
 .confirm-modal-actions .btn-confirm {
-  background-color: #cf222e;
+  background-color: var(--t-critical, #cf222e);
   border: 1px solid transparent;
   color: #fff;
 }
@@ -1230,7 +1233,7 @@ body.torizon-theme {
 
 @keyframes modalScaleUp {
   from {
-    transform: scale(0.9);
+    transform: scale(0.95);
     opacity: 0;
   }
   to {
