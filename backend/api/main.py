@@ -839,6 +839,24 @@ def list_project_members(project_id: str = Depends(verify_project_access(["admin
 @app.post("/api/projects/{project_id}/members")
 def add_project_member(payload: ProjectMemberAdd, project_id: str = Depends(verify_project_access(["admin"]))) -> dict[str, Any]:
     with db() as conn:
+        # If payload tries to set a non-admin role, check if they are the last admin
+        if payload.role != "admin":
+            current_role_row = conn.execute(
+                "SELECT role FROM user_projects WHERE user_sub = ? AND project_id = ?",
+                (payload.user_sub, project_id),
+            ).fetchone()
+            if current_role_row and current_role_row[0] == "admin":
+                # Check how many other admins exist
+                other_admins = conn.execute(
+                    "SELECT COUNT(*) FROM user_projects WHERE project_id = ? AND role = 'admin' AND user_sub != ?",
+                    (project_id, payload.user_sub),
+                ).fetchone()[0]
+                if other_admins == 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Cannot demote the last administrator of the project. A project must have at least one administrator."
+                    )
+
         conn.execute(
             """
             INSERT INTO user_projects (user_sub, project_id, role)
@@ -853,6 +871,23 @@ def add_project_member(payload: ProjectMemberAdd, project_id: str = Depends(veri
 @app.delete("/api/projects/{project_id}/members/{user_sub}")
 def remove_project_member(user_sub: str, project_id: str = Depends(verify_project_access(["admin"]))) -> dict[str, Any]:
     with db() as conn:
+        # Check if the user is an admin of the project
+        row = conn.execute(
+            "SELECT role FROM user_projects WHERE user_sub = ? AND project_id = ?",
+            (user_sub, project_id),
+        ).fetchone()
+        if row and row[0] == "admin":
+            # Check how many other admins exist for this project
+            other_admins = conn.execute(
+                "SELECT COUNT(*) FROM user_projects WHERE project_id = ? AND role = 'admin' AND user_sub != ?",
+                (project_id, user_sub),
+            ).fetchone()[0]
+            if other_admins == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot remove the last administrator of the project. A project must have at least one administrator."
+                )
+        
         conn.execute(
             "DELETE FROM user_projects WHERE user_sub = ? AND project_id = ?",
             (user_sub, project_id),
