@@ -810,6 +810,9 @@ def list_available_users(current_user: dict[str, Any] = Depends(get_current_user
                 users.append({
                     "sub": u.get("id"),
                     "username": u.get("username"),
+                    "email": email or "",
+                    "first_name": u.get("firstName", ""),
+                    "last_name": u.get("lastName", ""),
                     "label": label
                 })
             users.sort(key=lambda x: x["username"].lower())

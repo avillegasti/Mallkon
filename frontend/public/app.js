@@ -410,16 +410,21 @@ async function renderProjectSettings() {
       return;
     }
 
-    // Check project membership role
+    // Check project membership role and fetch available users
     let userProjectRole = null;
     let members = [];
+    let users = [];
     try {
-      const membersData = await fetchJson(`/api/projects/${encodeURIComponent(state.activeProjectId)}/members`);
+      const [membersData, usersData] = await Promise.all([
+        fetchJson(`/api/projects/${encodeURIComponent(state.activeProjectId)}/members`),
+        fetchJson("/api/users")
+      ]);
       members = Array.isArray(membersData.members) ? membersData.members : [];
+      users = Array.isArray(usersData.users) ? usersData.users : [];
       const self = members.find(m => m.user_sub === currentUserSub());
       userProjectRole = self ? self.role : null;
     } catch (err) {
-      console.error("Could not fetch project members", err);
+      console.error("Could not fetch project members or users", err);
     }
 
     const isProjectAdmin = isAdmin || userProjectRole === "admin";
@@ -432,15 +437,24 @@ async function renderProjectSettings() {
 
       // Render members
       if (el.projectMembersTableBody) {
-        el.projectMembersTableBody.innerHTML = members.map(member => `
-          <tr style="border-bottom: 1px solid #444c56; color: #adbac7;">
-            <td style="padding: 8px 0;">${escapeHtml(member.user_sub)}</td>
-            <td style="padding: 8px 0;"><span class="badge info" style="font-size: 11px; padding: 2px 8px; border-radius: 4px; background-color: #ddf4ff; color: #0969da; font-weight: 600; text-transform: uppercase;">${escapeHtml(member.role)}</span></td>
-            <td style="padding: 8px 0; text-align: right;">
-              ${isProjectAdmin ? `<button class="btn delete-member-btn" data-sub="${escapeHtml(member.user_sub)}" style="background-color: #cf222e; color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 11px; cursor: pointer;">Remove</button>` : "-"}
-            </td>
-          </tr>
-        `).join("");
+        const userMap = new Map(users.map(u => [u.sub, u]));
+        el.projectMembersTableBody.innerHTML = members.map(member => {
+          const userDetails = userMap.get(member.user_sub);
+          const username = userDetails ? userDetails.username : member.user_sub;
+          const fullName = userDetails ? `${userDetails.first_name || ""} ${userDetails.last_name || ""}`.trim() || "-" : "-";
+          const email = userDetails ? userDetails.email || "-" : "-";
+          return `
+            <tr style="border-bottom: 1px solid #444c56; color: #adbac7;">
+              <td style="padding: 8px 0;">${escapeHtml(username)}</td>
+              <td style="padding: 8px 0;">${escapeHtml(fullName)}</td>
+              <td style="padding: 8px 0;">${escapeHtml(email)}</td>
+              <td style="padding: 8px 0;"><span class="badge info" style="font-size: 11px; padding: 2px 8px; border-radius: 4px; background-color: #ddf4ff; color: #0969da; font-weight: 600; text-transform: uppercase;">${escapeHtml(member.role)}</span></td>
+              <td style="padding: 8px 0; text-align: right;">
+                ${isProjectAdmin ? `<button class="btn delete-member-btn" data-sub="${escapeHtml(member.user_sub)}" style="background-color: #cf222e; color: white; border: none; padding: 4px 8px; border-radius: 4px; font-size: 11px; cursor: pointer;">Remove</button>` : "-"}
+              </td>
+            </tr>
+          `;
+        }).join("");
 
         // Bind delete events
         el.projectMembersTableBody.querySelectorAll(".delete-member-btn").forEach(btn => {
@@ -461,21 +475,15 @@ async function renderProjectSettings() {
       if (el.projectSettingsSection) el.projectSettingsSection.style.display = "none";
     }
 
-    // Fetch and populate Keycloak users select
+    // Populate Keycloak users select
     if (el.newMemberSub) {
-      try {
-        const usersData = await fetchJson("/api/users");
-        const users = Array.isArray(usersData.users) ? usersData.users : [];
-        const existingSubs = new Set(members.map(m => m.user_sub));
-        const availableUsers = users.filter(u => !existingSubs.has(u.sub));
+      const existingSubs = new Set(members.map(m => m.user_sub));
+      const availableUsers = users.filter(u => !existingSubs.has(u.sub));
 
-        el.newMemberSub.innerHTML = `
-          <option value="">Select User...</option>
-          ${availableUsers.map(u => `<option value="${escapeHtml(u.sub)}">${escapeHtml(u.label)}</option>`).join("")}
-        `;
-      } catch (err) {
-        console.error("Could not fetch available users:", err);
-      }
+      el.newMemberSub.innerHTML = `
+        <option value="">Select User...</option>
+        ${availableUsers.map(u => `<option value="${escapeHtml(u.sub)}">${escapeHtml(u.label)}</option>`).join("")}
+      `;
     }
 
     // Bind Add Member button once
